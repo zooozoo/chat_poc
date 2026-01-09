@@ -12,30 +12,36 @@ import org.springframework.data.redis.listener.RedisMessageListenerContainer
 @Configuration
 class RedisListenerConfig(private val redisSubscriber: RedisSubscriber) {
 
-    @Bean
-    fun redisMessageListenerContainer(
-            connectionFactory: RedisConnectionFactory
-    ): RedisMessageListenerContainer {
-        return RedisMessageListenerContainer().apply {
-            setConnectionFactory(connectionFactory)
+        @Bean
+        fun redisMessageListenerContainer(
+                connectionFactory: RedisConnectionFactory
+        ): RedisMessageListenerContainer {
+                return RedisMessageListenerContainer().apply {
+                        setConnectionFactory(connectionFactory)
 
-            // 채팅방 메시지 구독 (패턴 매칭)
-            addMessageListener(
-                    redisSubscriber,
-                    PatternTopic("${RedisPublisher.CHAT_CHANNEL_PREFIX}*")
-            )
+                        // 채팅방 메시지 구독 (패턴 매칭)
+                        addMessageListener(
+                                redisSubscriber,
+                                PatternTopic("${RedisPublisher.CHAT_CHANNEL_PREFIX}*")
+                        )
 
-            // Admin 알림 채널 구독
-            addMessageListener(
-                    redisSubscriber,
-                    ChannelTopic(RedisPublisher.ADMIN_NOTIFICATION_CHANNEL)
-            )
+                        // Admin 알림 채널 구독
+                        addMessageListener(
+                                redisSubscriber,
+                                ChannelTopic(RedisPublisher.ADMIN_NOTIFICATION_CHANNEL)
+                        )
 
-            // 읽음 알림 채널 구독 (패턴 매칭)
-            addMessageListener(
-                    redisSubscriber,
-                    PatternTopic("${RedisPublisher.READ_NOTIFICATION_PREFIX}*")
-            )
+                        // 읽음 알림 채널 구독 (패턴 매칭)
+                        addMessageListener(
+                                redisSubscriber,
+                                PatternTopic("${RedisPublisher.READ_NOTIFICATION_PREFIX}*")
+                        )
+
+                        // 배정 알림 채널 구독
+                        addMessageListener(
+                                redisSubscriber,
+                                ChannelTopic(RedisPublisher.ASSIGNMENT_CHANNEL)
+                        )
+                }
         }
-    }
 }

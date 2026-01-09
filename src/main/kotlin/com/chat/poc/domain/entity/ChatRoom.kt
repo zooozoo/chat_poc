@@ -10,6 +10,7 @@ class ChatRoom(
         @ManyToOne(fetch = FetchType.LAZY)
         @JoinColumn(name = "user_id", nullable = false)
         val user: User,
+        @ManyToOne(fetch = FetchType.LAZY) @JoinColumn(name = "admin_id") var admin: Admin? = null,
         @Column(name = "last_message_content", columnDefinition = "TEXT")
         var lastMessageContent: String? = null,
         @Column(name = "last_message_at") var lastMessageAt: LocalDateTime? = null,
@@ -22,6 +23,16 @@ class ChatRoom(
     fun updateLastMessage(content: String, messageAt: LocalDateTime = LocalDateTime.now()) {
         this.lastMessageContent = content
         this.lastMessageAt = messageAt
+    }
+
+    /** 상담사 배정 */
+    fun assignAdmin(admin: Admin) {
+        this.admin = admin
+    }
+
+    /** 배정 해제 (필요시) */
+    fun unassignAdmin() {
+        this.admin = null
     }
 
     override fun equals(other: Any?): Boolean {

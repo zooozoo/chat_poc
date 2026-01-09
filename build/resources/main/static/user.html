@@ -151,7 +151,7 @@
                     ${msg.content}
                 </div>
                 <div class="message-meta">
-                    ${isMe ? `<span class="read-indicator ${msg.read ? 'read' : ''}" data-msg-id="${msg.id}">${msg.read ? '읽음' : '안읽음'}</span>` : ''}
+                    ${isMe ? `<span class="read-indicator ${msg.isRead ? 'read' : ''}" data-msg-id="${msg.id}">${msg.isRead ? '읽음' : '안읽음'}</span>` : ''}
                     <span>${formatTime(msg.createdAt)}</span>
                 </div>
             `;

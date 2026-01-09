@@ -237,3 +237,64 @@ message-id:nx92k-1
 {"chatRoomId":1,"readByType":"ADMIN","readAt":"2026-01-09 17:00:00"}
 ^@
 ```
+
+---
+
+## 6. 상담사 배정 (Assignment Flow)
+관리자가 미배정 채팅방을 담당자로 배정받는 과정입니다. 다른 관리자들의 화면에서도 해당 방이 '미배정' 목록에서 사라지도록 동기화해야 합니다.
+
+### 6.1 배정 요청 및 알림
+```mermaid
+sequenceDiagram
+    participant AdminA as Admin A (Assigner)
+    participant API as AdminAssignmentController
+    participant S as ChatRoomService
+    participant DB as MySQL
+    participant Pub as RedisPublisher
+    participant Redis as Redis Channel
+    participant OtherAdmins as Other Admins
+
+    AdminA->>API: POST /api/admins/chatrooms/{id}/assign
+    API->>S: assignChatRoom(roomId, adminId)
+    
+    S->>DB: findById(roomId)
+    S->>S: Check if already assigned
+    S->>DB: update ChatRoom (set admin = adminId)
+    
+    rect rgb(255, 240, 245)
+        Note right of S: Real-time Sync
+        S->>Pub: publishAssignmentNotification
+        Pub->>Redis: PUBLISH chat:admin:assignment
+    end
+    
+    Redis->>OtherAdmins: Subscribe & Alert
+```
+
+### 6.2 배정 알림 수신 (For Sync)
+Redis Subscriber가 배정 알림을 수신하여 `/topic/admin/assignments`를 구독 중인 모든 관리자에게 브로드캐스팅합니다.
+
+#### ✉️ Redis Publish Payload
+**Channel**: `chat:admin:assignment`
+```json
+{
+  "chatRoomId": 1,
+  "assignedAdminId": 5,
+  "assignedAdminEmail": "admin1@email.com",
+  "assignedAt": "2026-01-09 18:30:00"
+}
+```
+
+#### ✉️ STOMP Frame: MESSAGE (Assignment Notification)
+관리자 클라이언트는 이 메시지를 받으면:
+1. 배정자가 **자신**이면, '미배정' 탭에서 방을 제거하고 '내 상담' 및 '목록'을 갱신합니다.
+2. 배정자가 **타인**이면, '미배정' 탭에서 방을 즉시 제거합니다.
+
+```text
+MESSAGE
+destination:/topic/admin/assignments
+content-type:application/json
+subscription:sub-admin-noti
+
+{"chatRoomId":1,"assignedAdminId":5,"assignedAdminEmail":"admin1@email.com","assignedAt":"..."}
+^@
+```

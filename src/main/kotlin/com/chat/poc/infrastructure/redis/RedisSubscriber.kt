@@ -1,6 +1,7 @@
 package com.chat.poc.infrastructure.redis
 
 import com.chat.poc.presentation.dto.ChatMessageResponse
+import com.chat.poc.presentation.dto.ChatRoomAssignmentNotification
 import com.chat.poc.presentation.dto.ChatRoomNotification
 import com.chat.poc.presentation.dto.ReadNotification
 import com.fasterxml.jackson.databind.ObjectMapper
@@ -40,6 +41,9 @@ class RedisSubscriber(
                 channel.startsWith(RedisPublisher.READ_NOTIFICATION_PREFIX) -> {
                     handleReadNotification(channel, payload)
                 }
+                channel == RedisPublisher.ASSIGNMENT_CHANNEL -> {
+                    handleAssignmentNotification(payload)
+                }
             }
         } catch (e: Exception) {
             log.error("Error processing Redis message", e)
@@ -64,5 +68,12 @@ class RedisSubscriber(
         val notification = objectMapper.readValue(payload, ReadNotification::class.java)
         messagingTemplate.convertAndSend("/topic/chat/$chatRoomId/read", notification)
         log.debug("Sent read notification to /topic/chat/$chatRoomId/read")
+    }
+
+    private fun handleAssignmentNotification(payload: String) {
+        val notification =
+                objectMapper.readValue(payload, ChatRoomAssignmentNotification::class.java)
+        messagingTemplate.convertAndSend("/topic/admin/assignments", notification)
+        log.debug("Sent assignment notification to /topic/admin/assignments")
     }
 }

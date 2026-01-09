@@ -1,5 +1,6 @@
 package com.chat.poc.domain.repository
 
+import com.chat.poc.domain.entity.Admin
 import com.chat.poc.domain.entity.ChatRoom
 import com.chat.poc.domain.entity.User
 import java.util.Optional
@@ -13,4 +14,10 @@ interface ChatRoomRepository : JpaRepository<ChatRoom, Long> {
     fun findByUserId(userId: Long): Optional<ChatRoom>
 
     @Query("SELECT cr FROM ChatRoom cr JOIN FETCH cr.user") fun findAllWithUser(): List<ChatRoom>
+
+    @Query("SELECT cr FROM ChatRoom cr JOIN FETCH cr.user WHERE cr.admin IS NULL")
+    fun findAllByAdminIsNull(): List<ChatRoom>
+
+    @Query("SELECT cr FROM ChatRoom cr JOIN FETCH cr.user WHERE cr.admin = :admin")
+    fun findAllByAdmin(admin: Admin): List<ChatRoom>
 }

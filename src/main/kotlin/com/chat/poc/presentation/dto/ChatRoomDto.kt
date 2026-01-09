@@ -21,6 +21,7 @@ data class ChatRoomSummary(
         val unreadCount: Long,
         val lastMessageContent: String?,
         val lastMessageAt: String?,
+        val assignedAdminEmail: String? = null,
         val createdAt: String
 )
 
@@ -28,6 +29,7 @@ data class ChatRoomSummary(
 data class ChatRoomDetailResponse(
         val id: Long,
         val userEmail: String,
+        val assignedAdminEmail: String? = null,
         val messages: List<MessageResponse>,
         val createdAt: String
 )

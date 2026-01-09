@@ -19,7 +19,8 @@ data class ChatRoomNotification(
         val userEmail: String,
         val unreadCount: Long,
         val lastMessageContent: String,
-        val lastMessageAt: String
+        val lastMessageAt: String,
+        val assignedAdminId: Long? = null
 )
 
 /** 읽음 알림 DTO */
@@ -27,4 +28,11 @@ data class ReadNotification(
         val chatRoomId: Long,
         val readByType: String, // "USER" or "ADMIN"
         val readAt: String
+)
+
+data class ChatRoomAssignmentNotification(
+        val chatRoomId: Long,
+        val assignedAdminId: Long,
+        val assignedAdminEmail: String,
+        val assignedAt: String
 )

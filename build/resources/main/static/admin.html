@@ -62,6 +62,43 @@
             background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
             color: white;
         }
+
+        .sidebar-tabs {
+            display: flex;
+            background: #f1f5f9;
+        }
+
+        .sidebar-tab {
+            flex: 1;
+            padding: 12px;
+            text-align: center;
+            cursor: pointer;
+            color: var(--text-secondary);
+            border-bottom: 2px solid transparent;
+            font-size: 14px;
+        }
+
+        .sidebar-tab.active {
+            background: white;
+            color: var(--primary);
+            border-bottom-color: var(--primary);
+            font-weight: 600;
+        }
+
+        .assign-btn {
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 6px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-left: auto;
+        }
+
+        .assign-btn:hover {
+            background: var(--primary-dark);
+        }
     </style>
 </head>
 
@@ -70,10 +107,16 @@
         <!-- 사이드바: 채팅방 목록 -->
         <div class="sidebar">
             <div class="chat-header">
-                <h2>채팅 목록</h2>
+                <h2>관리자 채팅</h2>
                 <button onclick="logout()" class="btn btn-secondary"
                     style="font-size: 11px; padding: 4px 8px; background: rgba(255,255,255,0.2); border: none; color: white;">로그아웃</button>
             </div>
+
+            <div class="sidebar-tabs">
+                <div class="sidebar-tab active" onclick="switchTab('unassigned')" id="tab-unassigned">미배정 (0)</div>
+                <div class="sidebar-tab" onclick="switchTab('mine')" id="tab-mine">내 상담 (0)</div>
+            </div>
+
             <div id="chatList" class="chat-list-container">
                 <!-- 채팅방 목록이 여기에 표시됨 -->
             </div>
@@ -87,6 +130,8 @@
                     <div class="chatroom-avatar" style="width: 32px; height: 32px; font-size: 14px; margin: 0;">U</div>
                     <h3 id="currentUserName">사용자</h3>
                 </div>
+                <button id="assignBtn" class="assign-btn" style="display: none;" onclick="assignCurrentRoom()">상담
+                    시작하기</button>
             </div>
 
             <div id="chatPlaceholder" class="chat-placeholder">
@@ -116,6 +161,8 @@
         let currentRoomId = null;
         let currentSubscription = null;
         let readSubscription = null;
+        let currentAdminId = null;
+        let activeTab = 'unassigned'; // 'unassigned' or 'mine'
 
         async function init() {
             try {
@@ -125,6 +172,10 @@
                     window.location.href = '/index.html';
                     return;
                 }
+                const adminData = await adminRes.json();
+                if (adminData.success) {
+                    currentAdminId = adminData.data.id;
+                }
 
                 // 2. WebSocket 연결
                 connectWebSocket();
@@ -132,28 +183,81 @@
                 // 3. 채팅방 목록 로드
                 loadChatRooms();
 
+                // 4. 전체 탭 카운트 초기화 (비활성 탭 포함)
+                updateInitialTabCounts();
+
             } catch (e) {
                 console.error('Init failed', e);
             }
         }
 
+        async function updateInitialTabCounts() {
+            try {
+                // 미배정 카운트
+                const resUnassigned = await fetch('/api/admins/chatrooms/unassigned');
+                const dataUnassigned = await resUnassigned.json();
+                if (dataUnassigned.success) {
+                    updateTabCount('unassigned', dataUnassigned.data.chatRooms.length);
+                }
+
+                // 내 상담 카운트
+                const resMine = await fetch('/api/admins/chatrooms/mine');
+                const dataMine = await resMine.json();
+                if (dataMine.success) {
+                    updateTabCount('mine', dataMine.data.chatRooms.length);
+                }
+            } catch (e) {
+                console.error('Failed to update tab counts', e);
+            }
+        }
+
+        async function switchTab(tab) {
+            if (activeTab === tab) return;
+            activeTab = tab;
+
+            document.querySelectorAll('.sidebar-tab').forEach(el => el.classList.remove('active'));
+            document.getElementById(`tab-${tab}`).classList.add('active');
+
+            // 탭 전환 시 채팅방 선택 해제 (심플하게)
+            currentRoomId = null;
+            document.getElementById('chatHeader').style.display = 'none';
+            document.getElementById('chatArea').style.display = 'none';
+            document.getElementById('chatPlaceholder').style.display = 'flex';
+            if (currentSubscription) currentSubscription.unsubscribe();
+
+            loadChatRooms();
+        }
+
         async function loadChatRooms() {
-            const res = await fetch('/api/admins/chatrooms');
+            const endpoint = activeTab === 'unassigned' ? '/api/admins/chatrooms/unassigned' : '/api/admins/chatrooms/mine';
+            const res = await fetch(endpoint);
             const data = await res.json();
 
             if (data.success) {
                 renderChatList(data.data.chatRooms);
+                updateTabCount(activeTab, data.data.chatRooms.length);
             }
+        }
+
+        function updateTabCount(tab, count) {
+            const el = document.getElementById(`tab-${tab}`);
+            const text = tab === 'unassigned' ? '미배정' : '내 상담';
+            el.textContent = `${text} (${count})`;
         }
 
         function renderChatList(rooms) {
             const container = document.getElementById('chatList');
             container.innerHTML = '';
 
+            if (rooms.length === 0) {
+                container.innerHTML = '<div style="text-align:center; padding: 20px; color: #888;">채팅방이 없습니다.</div>';
+                return;
+            }
+
             rooms.forEach(room => {
                 const div = document.createElement('div');
                 div.className = `chatroom-item ${currentRoomId === room.id ? 'active' : ''}`;
-                div.onclick = () => selectRoom(room.id, room.userEmail);
+                div.onclick = () => selectRoom(room.id, room.userEmail, room.assignedAdminEmail);
                 div.id = `room-${room.id}`;
 
                 div.innerHTML = `
@@ -179,22 +283,93 @@
             stompClient.connect({}, () => {
                 console.log('Connected');
 
-                // 채팅방 목록 실시간 업데이트 구독 (Admin 전용 채널)
+                // 채팅방 목록 실시간 업데이트 구독 (Admin 전용 채널 - 기존)
                 stompClient.subscribe('/topic/admin/chatrooms', (message) => {
                     const noti = JSON.parse(message.body);
+                    // 미배정 탭이거나, 내 담당 채팅방이면 업데이트
+                    // (단순화를 위해 현재 탭 새로고침 혹은 로직 수행)
+                    // 여기서는 만약 리스트에 있는 방이면 업데이트, 아니면 (새 메시지면) 로드
                     updateChatRoomPreview(noti);
+                });
+
+                // 배정 알림 구독
+                stompClient.subscribe('/topic/admin/assignments', (message) => {
+                    const noti = JSON.parse(message.body);
+                    handleAssignmentNotification(noti);
                 });
 
             });
         }
 
-        function updateChatRoomPreview(noti) {
-            // 목록에 없는 방이면 새로고침 (간단하게 처리)
-            const roomEl = document.getElementById(`room-${noti.chatRoomId}`);
-            if (!roomEl) {
-                loadChatRooms();
-                return;
+        function handleAssignmentNotification(noti) {
+            // 내가 배정받은 경우
+            if (noti.assignedAdminId === currentAdminId) {
+                if (activeTab === 'mine') {
+                    loadChatRooms(); // 목록 리로드
+                } else {
+                    // 미배정 탭에 있었다면 해당 방 제거
+                    const el = document.getElementById(`room-${noti.chatRoomId}`);
+                    if (el) {
+                        el.remove();
+                        updateTabCount(activeTab, document.querySelectorAll('.chatroom-item').length);
+                    }
+                }
+            } else {
+                // 다른 사람이 배정받은 경우 -> 미배정 탭에서 제거
+                if (activeTab === 'unassigned') {
+                    const el = document.getElementById(`room-${noti.chatRoomId}`);
+                    if (el) {
+                        el.remove();
+                        updateTabCount(activeTab, document.querySelectorAll('.chatroom-item').length);
+                    } else {
+                        // 혹시 데이터 불일치 등으로 리스트에 없지만 카운트 갱신 필요할 수 있으나,
+                        // 여기서는 리스트 기반으로 카운트 하므로 패스
+                        loadChatRooms(); // 안전하게 리로드
+                    }
+                }
             }
+        }
+
+        function updateChatRoomPreview(noti) {
+            // 현재 리스트에 있는 방인지 확인
+            const roomEl = document.getElementById(`room-${noti.chatRoomId}`);
+
+            // 탭에 따라 처리 로직 분기
+            const belongsToUnassigned = !noti.assignedAdminId;
+            const belongsToMe = noti.assignedAdminId === currentAdminId;
+
+            let tabToUpdate = null;
+            if (activeTab === 'unassigned') {
+                if (belongsToUnassigned) {
+                    if (!roomEl) {
+                        loadChatRooms(); // 리로드 시 카운트도 갱신됨
+                        return;
+                    }
+                } else {
+                    if (roomEl) {
+                        roomEl.remove();
+                        // 현재 탭 카운트 감소
+                        updateTabCount(activeTab, document.querySelectorAll('.chatroom-item').length);
+                    }
+                    return;
+                }
+            } else if (activeTab === 'mine') {
+                if (belongsToMe) {
+                    if (!roomEl) {
+                        loadChatRooms();
+                        return;
+                    }
+                } else {
+                    if (roomEl) {
+                        roomEl.remove();
+                        updateTabCount(activeTab, document.querySelectorAll('.chatroom-item').length);
+                    }
+                    return;
+                }
+            }
+
+            // 여기서부터는 리스트에 엘리먼트가 존재하는 경우
+            if (!roomEl) return;
 
             // 프리뷰 업데이트
             document.getElementById(`preview-${noti.chatRoomId}`).textContent = noti.lastMessageContent;
@@ -202,16 +377,20 @@
             // 현재 보고있는 방이 아니면 뱃지 업데이트
             if (currentRoomId !== noti.chatRoomId) {
                 const badge = document.getElementById(`badge-${noti.chatRoomId}`);
-                badge.textContent = noti.unreadCount;
-                badge.classList.remove('hidden');
+                if (badge) {
+                    badge.textContent = noti.unreadCount;
+                    badge.classList.remove('hidden');
+                }
 
-                // 목록 맨 위로 올리기 (DOM 이동)
+                // 목록 맨 위로 올리기
                 const container = document.getElementById('chatList');
-                container.insertBefore(roomEl, container.firstChild);
+                if (container.firstChild !== roomEl) {
+                    container.insertBefore(roomEl, container.firstChild);
+                }
             }
         }
 
-        async function selectRoom(roomId, userEmail) {
+        async function selectRoom(roomId, userEmail, assignedAdminEmail) {
             currentRoomId = roomId;
             document.getElementById('currentUserName').textContent = userEmail;
 
@@ -219,6 +398,19 @@
             document.getElementById('chatPlaceholder').style.display = 'none';
             document.getElementById('chatHeader').style.display = 'flex';
             document.getElementById('chatArea').style.display = 'flex';
+
+            // 배정 버튼 처리
+            const assignBtn = document.getElementById('assignBtn');
+            if (activeTab === 'unassigned' && !assignedAdminEmail) {
+                assignBtn.style.display = 'block';
+                // 입력창 비활성화?
+                document.getElementById('messageInput').disabled = true;
+                document.getElementById('messageInput').placeholder = "상담 시작하기를 눌러주세요";
+            } else {
+                assignBtn.style.display = 'none';
+                document.getElementById('messageInput').disabled = false;
+                document.getElementById('messageInput').placeholder = "메시지 입력...";
+            }
 
             // 뱃지 제거
             const badge = document.getElementById(`badge-${roomId}`);
@@ -229,8 +421,12 @@
             if (readSubscription) readSubscription.unsubscribe();
 
             // API로 메시지 로드 (입장 처리 -> 읽음 처리 됨)
-            const res = await fetch(`/api/chatrooms/${roomId}`);
-            const data = await res.json();
+            const res = await fetch(`/api/chatrooms/${roomId}?isAdmin=true`); // isAdmin 파라미터 필요할수도? enterChatRoom controller 확인 필요. 
+            // 현재 enterChatRoom은 /api/chatrooms/{id} 로 매핑되어있고, 세션에서 userType 체크함.
+            // param 필요 없음.
+
+            const dataRes = await fetch(`/api/chatrooms/${roomId}`);
+            const data = await dataRes.json();
 
             if (data.success) {
                 renderMessages(data.data.messages);
@@ -247,6 +443,23 @@
                 readSubscription = stompClient.subscribe(`/topic/chat/${roomId}/read`, (message) => {
                     markAllAsRead();
                 });
+            }
+        }
+
+        async function assignCurrentRoom() {
+            if (!currentRoomId) return;
+            if (!confirm("이 상담을 시작하시겠습니까?")) return;
+
+            const res = await fetch(`/api/admins/chatrooms/${currentRoomId}/assign`, { method: 'POST' });
+            const data = await res.json();
+
+            if (data.success) {
+                alert("상담이 배정되었습니다.");
+                // 내 상담 탭으로 이동
+                switchTab('mine');
+                // 방금 그 방 선택 (약간 복잡할 수 있으니 일단 탭 이동만)
+            } else {
+                alert("배정 실패: " + (data.error?.message || "알 수 없는 오류"));
             }
         }
 
@@ -274,7 +487,7 @@
                     ${msg.content}
                 </div>
                 <div class="message-meta">
-                    ${isMe ? `<span class="read-indicator ${msg.read ? 'read' : ''}" data-msg-id="${msg.id}">${msg.read ? '읽음' : '안읽음'}</span>` : ''}
+                    ${isMe ? `<span class="read-indicator ${msg.isRead ? 'read' : ''}" data-msg-id="${msg.id}">${msg.isRead ? '읽음' : '안읽음'}</span>` : ''}
                     <span>${formatTime(msg.createdAt)}</span>
                 </div>
             `;
@@ -285,6 +498,11 @@
         function sendMessage() {
             const input = document.getElementById('messageInput');
             const content = input.value.trim();
+
+            if (input.disabled) {
+                alert("먼저 상담을 시작(배정)해주세요.");
+                return;
+            }
 
             if (content && stompClient && currentRoomId) {
                 stompClient.send(`/app/chat/${currentRoomId}/send`, {}, JSON.stringify({

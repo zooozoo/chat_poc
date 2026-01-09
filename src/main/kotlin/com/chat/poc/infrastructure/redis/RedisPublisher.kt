@@ -1,6 +1,7 @@
 package com.chat.poc.infrastructure.redis
 
 import com.chat.poc.presentation.dto.ChatMessageResponse
+import com.chat.poc.presentation.dto.ChatRoomAssignmentNotification
 import com.chat.poc.presentation.dto.ChatRoomNotification
 import com.chat.poc.presentation.dto.ReadNotification
 import com.fasterxml.jackson.databind.ObjectMapper
@@ -18,7 +19,9 @@ class RedisPublisher(
     companion object {
         const val CHAT_CHANNEL_PREFIX = "chat:room:"
         const val ADMIN_NOTIFICATION_CHANNEL = "chat:admin:notification"
+
         const val READ_NOTIFICATION_PREFIX = "chat:read:"
+        const val ASSIGNMENT_CHANNEL = "chat:admin:assignment"
     }
 
     /** 채팅방에 메시지 발행 */
@@ -42,5 +45,12 @@ class RedisPublisher(
         val payload = objectMapper.writeValueAsString(notification)
         redisTemplate.convertAndSend(channel, payload)
         log.debug("Published read notification to channel: $channel")
+    }
+
+    /** 배정 알림 발행 */
+    fun publishAssignmentNotification(notification: ChatRoomAssignmentNotification) {
+        val payload = objectMapper.writeValueAsString(notification)
+        redisTemplate.convertAndSend(ASSIGNMENT_CHANNEL, payload)
+        log.debug("Published assignment notification for chatRoom: ${notification.chatRoomId}")
     }
 }
