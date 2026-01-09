@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat POC - 관리자</title>
+    <link rel="stylesheet" href="/css/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
+    <style>
+        .admin-layout {
+            display: grid;
+            grid-template-columns: 350px 1fr;
+            gap: 20px;
+            height: calc(100vh - 40px);
+            margin: 20px auto;
+            max-width: 1400px;
+        }
+
+        .sidebar {
+            background: white;
+            border-radius: 16px;
+            box-shadow: var(--shadow-lg);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .main-chat {
+            background: white;
+            border-radius: 16px;
+            box-shadow: var(--shadow-lg);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .chat-placeholder {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-secondary);
+            font-size: 16px;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .chat-list-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px;
+        }
+
+        .chat-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+            color: white;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="admin-layout">
+        <!-- 사이드바: 채팅방 목록 -->
+        <div class="sidebar">
+            <div class="chat-header">
+                <h2>채팅 목록</h2>
+                <button onclick="logout()" class="btn btn-secondary"
+                    style="font-size: 11px; padding: 4px 8px; background: rgba(255,255,255,0.2); border: none; color: white;">로그아웃</button>
+            </div>
+            <div id="chatList" class="chat-list-container">
+                <!-- 채팅방 목록이 여기에 표시됨 -->
+            </div>
+        </div>
+
+        <!-- 메인: 채팅 화면 -->
+        <div class="main-chat">
+            <div id="chatHeader" class="chat-header"
+                style="display: none; background: white; color: var(--text-primary); border-bottom: 1px solid var(--border);">
+                <div style="display: flex; align-items: center; gap: 12px;">
+                    <div class="chatroom-avatar" style="width: 32px; height: 32px; font-size: 14px; margin: 0;">U</div>
+                    <h3 id="currentUserName">사용자</h3>
+                </div>
+            </div>
+
+            <div id="chatPlaceholder" class="chat-placeholder">
+                <span style="font-size: 48px;">💬</span>
+                <p>왼쪽 목록에서 채팅방을 선택하세요</p>
+            </div>
+
+            <div id="chatArea" style="display: none; flex: 1; flex-direction: column; height: 100%;">
+                <div class="messages-container" id="messages"></div>
+                <div class="chat-input-container">
+                    <input type="text" id="messageInput" class="chat-input" placeholder="메시지 입력...">
+                    <button onclick="sendMessage()" class="send-btn">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M22 2L11 13" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                stroke-linejoin="round" />
+                            <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="currentColor" stroke-width="2"
+                                stroke-linecap="round" stroke-linejoin="round" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let stompClient = null;
+        let currentRoomId = null;
+        let currentSubscription = null;
+        let readSubscription = null;
+
+        async function init() {
+            try {
+                // 1. 내 정보 조회 (로그인 체크)
+                const adminRes = await fetch('/api/admins/me');
+                if (adminRes.status === 401) {
+                    window.location.href = '/index.html';
+                    return;
+                }
+
+                // 2. WebSocket 연결
+                connectWebSocket();
+
+                // 3. 채팅방 목록 로드
+                loadChatRooms();
+
+            } catch (e) {
+                console.error('Init failed', e);
+            }
+        }
+
+        async function loadChatRooms() {
+            const res = await fetch('/api/admins/chatrooms');
+            const data = await res.json();
+
+            if (data.success) {
+                renderChatList(data.data.chatRooms);
+            }
+        }
+
+        function renderChatList(rooms) {
+            const container = document.getElementById('chatList');
+            container.innerHTML = '';
+
+            rooms.forEach(room => {
+                const div = document.createElement('div');
+                div.className = `chatroom-item ${currentRoomId === room.id ? 'active' : ''}`;
+                div.onclick = () => selectRoom(room.id, room.userEmail);
+                div.id = `room-${room.id}`;
+
+                div.innerHTML = `
+                    <div class="chatroom-avatar">${room.userEmail[0].toUpperCase()}</div>
+                    <div class="chatroom-info">
+                        <div class="chatroom-name">${room.userEmail}</div>
+                        <div class="chatroom-preview" id="preview-${room.id}">${room.lastMessageContent || '대화 없음'}</div>
+                    </div>
+                    <div class="chatroom-meta">
+                        <div class="chatroom-time">${formatTime(room.lastMessageAt)}</div>
+                        ${room.unreadCount > 0 ? `<div class="unread-badge" id="badge-${room.id}">${room.unreadCount}</div>` : `<div class="unread-badge hidden" id="badge-${room.id}">0</div>`}
+                    </div>
+                `;
+                container.appendChild(div);
+            });
+        }
+
+        function connectWebSocket() {
+            const socket = new SockJS('/ws');
+            stompClient = Stomp.over(socket);
+            stompClient.debug = null;
+
+            stompClient.connect({}, () => {
+                console.log('Connected');
+
+                // 채팅방 목록 실시간 업데이트 구독 (Admin 전용 채널)
+                stompClient.subscribe('/topic/admin/chatrooms', (message) => {
+                    const noti = JSON.parse(message.body);
+                    updateChatRoomPreview(noti);
+                });
+
+            });
+        }
+
+        function updateChatRoomPreview(noti) {
+            // 목록에 없는 방이면 새로고침 (간단하게 처리)
+            const roomEl = document.getElementById(`room-${noti.chatRoomId}`);
+            if (!roomEl) {
+                loadChatRooms();
+                return;
+            }
+
+            // 프리뷰 업데이트
+            document.getElementById(`preview-${noti.chatRoomId}`).textContent = noti.lastMessageContent;
+
+            // 현재 보고있는 방이 아니면 뱃지 업데이트
+            if (currentRoomId !== noti.chatRoomId) {
+                const badge = document.getElementById(`badge-${noti.chatRoomId}`);
+                badge.textContent = noti.unreadCount;
+                badge.classList.remove('hidden');
+
+                // 목록 맨 위로 올리기 (DOM 이동)
+                const container = document.getElementById('chatList');
+                container.insertBefore(roomEl, container.firstChild);
+            }
+        }
+
+        async function selectRoom(roomId, userEmail) {
+            currentRoomId = roomId;
+            document.getElementById('currentUserName').textContent = userEmail;
+
+            // UI 전환
+            document.getElementById('chatPlaceholder').style.display = 'none';
+            document.getElementById('chatHeader').style.display = 'flex';
+            document.getElementById('chatArea').style.display = 'flex';
+
+            // 뱃지 제거
+            const badge = document.getElementById(`badge-${roomId}`);
+            if (badge) badge.classList.add('hidden');
+
+            // 이전 구독 해제
+            if (currentSubscription) currentSubscription.unsubscribe();
+            if (readSubscription) readSubscription.unsubscribe();
+
+            // API로 메시지 로드 (입장 처리 -> 읽음 처리 됨)
+            const res = await fetch(`/api/chatrooms/${roomId}`);
+            const data = await res.json();
+
+            if (data.success) {
+                renderMessages(data.data.messages);
+                scrollToBottom();
+
+                // 새 방 구독
+                currentSubscription = stompClient.subscribe(`/topic/chat/${roomId}`, (message) => {
+                    const msg = JSON.parse(message.body);
+                    displayMessage(msg);
+                    scrollToBottom();
+                });
+
+                // 읽음 알림 구독
+                readSubscription = stompClient.subscribe(`/topic/chat/${roomId}/read`, (message) => {
+                    markAllAsRead();
+                });
+            }
+        }
+
+        function renderMessages(messages) {
+            const container = document.getElementById('messages');
+            container.innerHTML = '';
+            messages.forEach(displayMessage);
+        }
+
+        function displayMessage(msg) {
+            const container = document.getElementById('messages');
+            const div = document.createElement('div');
+
+            // ADMIN이 보낸 메시지 = 나(Admin)에게는 'user' 클래스 (오른쪽 - 색상은 CSS로 조정)
+            // USER가 보낸 메시지 = 나(Admin)에게는 'admin' 클래스 (왼쪽)
+            // 주의: style.css에서 .message.user를 오른쪽(내꺼), .message.admin을 왼쪽(상대)으로 정의했음.
+            // 여기서는 `isMe`가 참이면 `.message.user` 클래스를 줘서 오른쪽에 배치해야 함.
+
+            const isMe = msg.senderType === 'ADMIN';
+
+            div.className = `message ${isMe ? 'user' : 'admin'}`;
+
+            div.innerHTML = `
+                <div class="message-bubble">
+                    ${msg.content}
+                </div>
+                <div class="message-meta">
+                    ${isMe ? `<span class="read-indicator ${msg.read ? 'read' : ''}" data-msg-id="${msg.id}">${msg.read ? '읽음' : '안읽음'}</span>` : ''}
+                    <span>${formatTime(msg.createdAt)}</span>
+                </div>
+            `;
+
+            container.appendChild(div);
+        }
+
+        function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const content = input.value.trim();
+
+            if (content && stompClient && currentRoomId) {
+                stompClient.send(`/app/chat/${currentRoomId}/send`, {}, JSON.stringify({
+                    content: content
+                }));
+                input.value = '';
+                input.focus();
+            }
+        }
+
+        function markAllAsRead() {
+            document.querySelectorAll('.read-indicator').forEach(el => {
+                el.textContent = '읽음';
+                el.classList.add('read');
+            });
+        }
+
+        function scrollToBottom() {
+            const container = document.getElementById('messages');
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function formatTime(dateStr) {
+            if (!dateStr) return '';
+            const date = new Date(dateStr.replace(' ', 'T'));
+            return date.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+        }
+
+        function logout() {
+            fetch('/api/admins/logout', { method: 'POST' })
+                .then(() => window.location.href = '/index.html');
+        }
+
+        // Enter 키
+        document.getElementById('messageInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendMessage();
+        });
+
+        init();
+    </script>
+</body>
+
+</html>

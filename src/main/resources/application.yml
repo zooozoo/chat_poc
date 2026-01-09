@@ -1,0 +1,44 @@
+spring:
+  application:
+    name: chat-poc
+  
+  # JPA 설정
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.MySQLDialect
+    open-in-view: false
+  
+  # MySQL 설정
+  datasource:
+    url: jdbc:mysql://localhost:3306/chat_poc?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Seoul&characterEncoding=UTF-8
+    username: chat_user
+    password: chat_password
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 5
+  
+  # Redis 설정
+  data:
+    redis:
+      host: localhost
+      port: 6379
+  
+  # Session 설정 (Redis 기반)
+  session:
+    store-type: redis
+    timeout: 3600s
+
+server:
+  port: 8080
+
+logging:
+  level:
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+    com.chat: DEBUG

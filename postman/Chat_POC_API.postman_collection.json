@@ -1,0 +1,208 @@
+{
+	"info": {
+		"_postman_id": "chat-poc-collection",
+		"name": "Chat POC API",
+		"description": "채팅 POC 애플리케이션 API 컬렉션",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:8080",
+			"type": "string"
+		}
+	],
+	"item": [
+		{
+			"name": "User",
+			"item": [
+				{
+					"name": "User 로그인",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"email\": \"user1@email.com\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/users/login",
+							"host": ["{{base_url}}"],
+							"path": ["api", "users", "login"]
+						},
+						"description": "User 로그인 (없으면 자동 생성)"
+					}
+				},
+				{
+					"name": "User 내 정보 조회",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/users/me",
+							"host": ["{{base_url}}"],
+							"path": ["api", "users", "me"]
+						},
+						"description": "현재 로그인한 User 정보 조회"
+					}
+				},
+				{
+					"name": "User 로그아웃",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/users/logout",
+							"host": ["{{base_url}}"],
+							"path": ["api", "users", "logout"]
+						},
+						"description": "User 로그아웃"
+					}
+				},
+				{
+					"name": "User 채팅방 조회",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/users/chatroom",
+							"host": ["{{base_url}}"],
+							"path": ["api", "users", "chatroom"]
+						},
+						"description": "User의 채팅방 조회 (없으면 자동 생성)"
+					}
+				}
+			]
+		},
+		{
+			"name": "Admin",
+			"item": [
+				{
+					"name": "Admin 로그인",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"email\": \"admin1@email.com\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/admins/login",
+							"host": ["{{base_url}}"],
+							"path": ["api", "admins", "login"]
+						},
+						"description": "Admin 로그인 (없으면 자동 생성)"
+					}
+				},
+				{
+					"name": "Admin 내 정보 조회",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/admins/me",
+							"host": ["{{base_url}}"],
+							"path": ["api", "admins", "me"]
+						},
+						"description": "현재 로그인한 Admin 정보 조회"
+					}
+				},
+				{
+					"name": "Admin 로그아웃",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/admins/logout",
+							"host": ["{{base_url}}"],
+							"path": ["api", "admins", "logout"]
+						},
+						"description": "Admin 로그아웃"
+					}
+				},
+				{
+					"name": "Admin 채팅방 목록 조회",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/admins/chatrooms",
+							"host": ["{{base_url}}"],
+							"path": ["api", "admins", "chatrooms"]
+						},
+						"description": "모든 채팅방 목록 조회 (읽지 않은 메시지 수 포함)"
+					}
+				}
+			]
+		},
+		{
+			"name": "ChatRoom",
+			"item": [
+				{
+					"name": "채팅방 입장 (정보 조회)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/chatrooms/1",
+							"host": ["{{base_url}}"],
+							"path": ["api", "chatrooms", "1"]
+						},
+						"description": "채팅방 정보 및 메시지 목록 조회, 입장 시 읽음 처리"
+					}
+				},
+				{
+					"name": "채팅방 메시지 목록",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/chatrooms/1/messages?page=0&size=20",
+							"host": ["{{base_url}}"],
+							"path": ["api", "chatrooms", "1", "messages"],
+							"query": [
+								{
+									"key": "page",
+									"value": "0"
+								},
+								{
+									"key": "size",
+									"value": "20"
+								}
+							]
+						},
+						"description": "채팅방 메시지 목록 조회 (페이지네이션)"
+					}
+				}
+			]
+		},
+		{
+			"name": "Health",
+			"item": [
+				{
+					"name": "Health Check",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/health",
+							"host": ["{{base_url}}"],
+							"path": ["health"]
+						},
+						"description": "서버 상태 확인"
+					}
+				}
+			]
+		}
+	]
+}

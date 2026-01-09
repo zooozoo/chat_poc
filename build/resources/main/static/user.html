@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat POC - 사용자 채팅</title>
+    <link rel="stylesheet" href="/css/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
+</head>
+
+<body>
+    <div class="container">
+        <header class="card-header"
+            style="border-radius: 16px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center;">
+            <h1 style="font-size: 20px;">💬 상담 채팅</h1>
+            <div style="display: flex; gap: 10px; align-items: center;">
+                <span id="userEmail" style="font-size: 14px;"></span>
+                <button onclick="logout()" class="btn btn-secondary"
+                    style="padding: 6px 12px; font-size: 12px;">로그아웃</button>
+            </div>
+        </header>
+
+        <div class="card chat-container">
+            <div class="messages-container" id="messages">
+                <!-- 메시지가 여기에 표시됩니다 -->
+            </div>
+
+            <div class="chat-input-container">
+                <input type="text" id="messageInput" class="chat-input" placeholder="메시지를 입력하세요..." disabled>
+                <button id="sendBtn" onclick="sendMessage()" class="send-btn" disabled>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M22 2L11 13" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                            stroke-linejoin="round" />
+                        <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round" />
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let stompClient = null;
+        let chatRoomId = null;
+        let myEmail = null;
+
+        async function init() {
+            try {
+                // 1. 내 정보 조회
+                const userRes = await fetch('/api/users/me');
+                const userData = await userRes.json();
+
+                if (!userData.success) {
+                    window.location.href = '/_';
+                    return;
+                }
+                myEmail = userData.data.email;
+                document.getElementById('userEmail').textContent = myEmail;
+
+                // 2. 채팅방 조회 (없으면 자동생성)
+                const roomRes = await fetch('/api/users/chatroom');
+                const roomData = await roomRes.json();
+
+                if (roomData.success) {
+                    chatRoomId = roomData.data.id;
+
+                    // 3. 채팅방 입장 (메시지 목록 로드 + 읽음 처리)
+                    await enterChatRoom();
+
+                    // 4. WebSocket 연결
+                    connectWebSocket();
+                }
+            } catch (e) {
+                console.error('Initialization failed', e);
+            }
+        }
+
+        async function enterChatRoom() {
+            const res = await fetch(`/api/chatrooms/${chatRoomId}`);
+            const data = await res.json();
+
+            if (data.success) {
+                const container = document.getElementById('messages');
+                container.innerHTML = '';
+
+                // 이전 메시지 렌더링
+                data.data.messages.forEach(msg => {
+                    displayMessage(msg);
+                });
+
+                scrollToBottom();
+            }
+        }
+
+        function connectWebSocket() {
+            const socket = new SockJS('/ws');
+            stompClient = Stomp.over(socket);
+            stompClient.debug = null; // 디버그 로그 끄기
+
+            stompClient.connect({}, (frame) => {
+                console.log('Connected: ' + frame);
+
+                // 1. 채팅 메시지 구독
+                stompClient.subscribe(`/topic/chat/${chatRoomId}`, (message) => {
+                    const msg = JSON.parse(message.body);
+                    displayMessage(msg);
+                    scrollToBottom();
+                });
+
+                // 2. 읽음 알림 구독
+                stompClient.subscribe(`/topic/chat/${chatRoomId}/read`, (message) => {
+                    markAllAsRead();
+                });
+
+                // 입력 활성화
+                document.getElementById('messageInput').disabled = false;
+                document.getElementById('sendBtn').disabled = false;
+
+            }, (error) => {
+                console.error('STOMP error', error);
+            });
+        }
+
+        function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const content = input.value.trim();
+
+            if (content && stompClient) {
+                stompClient.send(`/app/chat/${chatRoomId}/send`, {}, JSON.stringify({
+                    content: content
+                }));
+                input.value = '';
+                input.focus();
+            }
+        }
+
+        function displayMessage(msg) {
+            const container = document.getElementById('messages');
+            const div = document.createElement('div');
+
+            // USER가 보낸 메시지 = 나(User)에게는 'user' 클래스 (오른쪽)
+            // ADMIN이 보낸 메시지 = 나(User)에게는 'admin' 클래스 (왼쪽)
+            const isMe = msg.senderType === 'USER';
+
+            div.className = `message ${isMe ? 'user' : 'admin'}`;
+
+            div.innerHTML = `
+                <div class="message-bubble">
+                    ${msg.content}
+                </div>
+                <div class="message-meta">
+                    ${isMe ? `<span class="read-indicator ${msg.read ? 'read' : ''}" data-msg-id="${msg.id}">${msg.read ? '읽음' : '안읽음'}</span>` : ''}
+                    <span>${formatTime(msg.createdAt)}</span>
+                </div>
+            `;
+
+            container.appendChild(div);
+        }
+
+        function markAllAsRead() {
+            document.querySelectorAll('.read-indicator').forEach(el => {
+                el.textContent = '읽음';
+                el.classList.add('read');
+            });
+        }
+
+        function scrollToBottom() {
+            const container = document.getElementById('messages');
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function formatTime(dateStr) {
+            // "2026-01-09 16:30:26" -> "오후 4:30"
+            if (!dateStr) return '';
+            const date = new Date(dateStr.replace(' ', 'T'));
+            return date.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+        }
+
+        function logout() {
+            fetch('/api/users/logout', { method: 'POST' })
+                .then(() => window.location.href = '/index.html');
+        }
+
+        // Enter 키 처리
+        document.getElementById('messageInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendMessage();
+        });
+
+        init();
+    </script>
+</body>
+
+</html>
