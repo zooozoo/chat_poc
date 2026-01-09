@@ -32,8 +32,14 @@
 						},
 						"url": {
 							"raw": "{{base_url}}/api/users/login",
-							"host": ["{{base_url}}"],
-							"path": ["api", "users", "login"]
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"users",
+								"login"
+							]
 						},
 						"description": "User 로그인 (없으면 자동 생성)"
 					}
@@ -45,8 +51,14 @@
 						"header": [],
 						"url": {
 							"raw": "{{base_url}}/api/users/me",
-							"host": ["{{base_url}}"],
-							"path": ["api", "users", "me"]
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"users",
+								"me"
+							]
 						},
 						"description": "현재 로그인한 User 정보 조회"
 					}
@@ -58,8 +70,14 @@
 						"header": [],
 						"url": {
 							"raw": "{{base_url}}/api/users/logout",
-							"host": ["{{base_url}}"],
-							"path": ["api", "users", "logout"]
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"users",
+								"logout"
+							]
 						},
 						"description": "User 로그아웃"
 					}
@@ -71,8 +89,14 @@
 						"header": [],
 						"url": {
 							"raw": "{{base_url}}/api/users/chatroom",
-							"host": ["{{base_url}}"],
-							"path": ["api", "users", "chatroom"]
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"users",
+								"chatroom"
+							]
 						},
 						"description": "User의 채팅방 조회 (없으면 자동 생성)"
 					}
@@ -98,8 +122,14 @@
 						},
 						"url": {
 							"raw": "{{base_url}}/api/admins/login",
-							"host": ["{{base_url}}"],
-							"path": ["api", "admins", "login"]
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"admins",
+								"login"
+							]
 						},
 						"description": "Admin 로그인 (없으면 자동 생성)"
 					}
@@ -111,8 +141,14 @@
 						"header": [],
 						"url": {
 							"raw": "{{base_url}}/api/admins/me",
-							"host": ["{{base_url}}"],
-							"path": ["api", "admins", "me"]
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"admins",
+								"me"
+							]
 						},
 						"description": "현재 로그인한 Admin 정보 조회"
 					}
@@ -124,8 +160,14 @@
 						"header": [],
 						"url": {
 							"raw": "{{base_url}}/api/admins/logout",
-							"host": ["{{base_url}}"],
-							"path": ["api", "admins", "logout"]
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"admins",
+								"logout"
+							]
 						},
 						"description": "Admin 로그아웃"
 					}
@@ -137,10 +179,82 @@
 						"header": [],
 						"url": {
 							"raw": "{{base_url}}/api/admins/chatrooms",
-							"host": ["{{base_url}}"],
-							"path": ["api", "admins", "chatrooms"]
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"admins",
+								"chatrooms"
+							]
 						},
 						"description": "모든 채팅방 목록 조회 (읽지 않은 메시지 수 포함)"
+					}
+				}
+			]
+		},
+		{
+			"name": "Admin Assignment",
+			"item": [
+				{
+					"name": "Admin 미배정 채팅방 목록",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/admins/chatrooms/unassigned",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"admins",
+								"chatrooms",
+								"unassigned"
+							]
+						},
+						"description": "담당자가 없는(미배정) 채팅방 목록 조회"
+					}
+				},
+				{
+					"name": "Admin 내 상담 채팅방 목록",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/admins/chatrooms/mine",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"admins",
+								"chatrooms",
+								"mine"
+							]
+						},
+						"description": "내가 담당자로 배정된 채팅방 목록 조회"
+					}
+				},
+				{
+					"name": "Admin 채팅방 배정 (상담 시작)",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/admins/chatrooms/1/assign",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"admins",
+								"chatrooms",
+								"1",
+								"assign"
+							]
+						},
+						"description": "특정 채팅방을 나(현재 로그인한 Admin)에게 배정"
 					}
 				}
 			]
@@ -155,8 +269,14 @@
 						"header": [],
 						"url": {
 							"raw": "{{base_url}}/api/chatrooms/1",
-							"host": ["{{base_url}}"],
-							"path": ["api", "chatrooms", "1"]
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"chatrooms",
+								"1"
+							]
 						},
 						"description": "채팅방 정보 및 메시지 목록 조회, 입장 시 읽음 처리"
 					}
@@ -168,8 +288,15 @@
 						"header": [],
 						"url": {
 							"raw": "{{base_url}}/api/chatrooms/1/messages?page=0&size=20",
-							"host": ["{{base_url}}"],
-							"path": ["api", "chatrooms", "1", "messages"],
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"chatrooms",
+								"1",
+								"messages"
+							],
 							"query": [
 								{
 									"key": "page",
@@ -196,8 +323,12 @@
 						"header": [],
 						"url": {
 							"raw": "{{base_url}}/health",
-							"host": ["{{base_url}}"],
-							"path": ["health"]
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"health"
+							]
 						},
 						"description": "서버 상태 확인"
 					}

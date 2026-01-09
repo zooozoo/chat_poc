@@ -164,7 +164,7 @@ sequenceDiagram
     STOMP->>Receiver: MESSAGE frame
 ```
 
-#### ✉️ STOMP Frame: MESSAGE (Server → Client)
+#### ✉️ STOMP Frame: MESSAGE (Chat Message)
 구독 중인 클라이언트에게 전달되는 메시지 프레임입니다.
 ```text
 MESSAGE
@@ -174,6 +174,25 @@ subscription:sub-0
 message-id:nx92k-0
 
 {"id":101,"chatRoomId":1,"senderId":10,"senderType":"USER","content":"안녕하세요","createdAt":"..."}
+^@
+```
+
+#### ✉️ STOMP Frame: MESSAGE (Admin Notification)
+관리자 대시보드 목록 갱신을 위해 전달되는 알림입니다. `assignedAdminId`를 통해 '미배정'/'내 상담' 탭을 구분합니다.
+```text
+MESSAGE
+destination:/topic/admin/chatrooms
+content-type:application/json
+subscription:sub-admin-0
+
+{
+  "chatRoomId": 1,
+  "userEmail": "user1@email.com",
+  "unreadCount": 1,
+  "lastMessageContent": "안녕하세요",
+  "lastMessageAt": "2026-01-09 16:30:26",
+  "assignedAdminId": null
+}
 ^@
 ```
 
