@@ -33,6 +33,7 @@ sequenceDiagram
 ```
 
 #### ✉️ HTTP Request Spec
+
 **POST** `/api/users/login` (User 로그인)
 **POST** `/api/admins/login` (Admin 로그인)
 
@@ -148,6 +149,7 @@ content-length:45
 
 #### ✉️ Redis Publish (Internal) - Chat Message
 서버 내부에서 Redis로 Broadcasting 하는 메시지 페이로드입니다.
+
 **Channel**: `chat:room:1`
 ```json
 {
@@ -162,6 +164,7 @@ content-length:45
 
 #### ✉️ Redis Publish (Internal) - Admin Notification
 User가 메시지를 보낼 때 Admin에게 채팅방 업데이트 알림을 전송하는 페이로드입니다.
+
 **Channel**: `chat:admin:notification`
 ```json
 {
@@ -232,34 +235,24 @@ subscription:sub-admin-0
 ---
 
 ## 5. 읽음 처리 프로세스 (Read Status Flow)
-채팅방 입장 시 또는 실시간으로 상대방이 메시지를 읽었을 때의 처리 과정입니다.
+실시간 WebSocket 기반의 읽음 처리 프로세스입니다. 채팅방 입장 시 또는 메시지 수신 시 클라이언트가 명시적으로 "Read" 명령을 전송하여 읽음 상태를 동기화합니다.
 
-### 5.1 채팅방 입장 시 읽음 처리
-Admin이 채팅방에 입장하면 User가 보낸 메시지들을 '읽음'으로 처리합니다.
+### 5.1 채팅방 입장 (데이터 조회)
+채팅방에 입장할 때 메시지 목록과 채팅방 정보를 조회합니다. **읽음 처리는 별도의 WebSocket 명령으로 수행됩니다.**
 
 ```mermaid
 sequenceDiagram
-    participant Admin as Admin Client
+    participant Client as Client (User/Admin)
     participant API as ChatRoomController
     participant S as ChatRoomService
     participant DB as MySQL
-    participant Pub as RedisPublisher
 
-    Admin->>API: GET /api/chatrooms/{id}
-    API->>S: enterChatRoom(id, isAdmin=true)
-    
-    rect rgb(240, 248, 255)
-        Note right of S: Mark Messages as Read
-        S->>DB: markAllAsRead(chatRoomId, SenderType.USER)
-    end
-    
-    alt if updated count > 0
-        S->>Pub: publishReadNotification(id, ReadNotification)
-        Pub->>Redis: PUBLISH chat:read:{roomId}
-    end
-    
+    Client->>API: GET /api/chatrooms/{id}
+    API->>S: enterChatRoom(id, isAdmin)
     S->>DB: findMessages()
-    S-->>Admin: ChatRoomDetail (Messages + Status)
+    S-->>Client: ChatRoomDetail (Messages only)
+
+    Note over Client: 읽음 처리는 WebSocket을 통해 별도로 수행
 ```
 
 #### ✉️ HTTP Request Spec
@@ -267,6 +260,7 @@ sequenceDiagram
 - **Path Parameter**: `id` (채팅방 ID)
 - **세션 인증 필요**: User 또는 Admin
 - **권한**: User는 본인 채팅방만 접근 가능, Admin은 모든 채팅방 접근 가능
+- **동작**: 메시지 목록만 조회하며, 읽음 처리는 수행하지 않음
 
 **Response**: `ChatRoomDetailResponse`
 ```json
@@ -282,8 +276,8 @@ sequenceDiagram
         "senderId": 10,
         "senderType": "USER",
         "content": "안녕하세요",
-        "isRead": true,
-        "readAt": "2026-01-09 17:00:00",
+        "isRead": false,
+        "readAt": null,
         "createdAt": "2026-01-09 16:30:26"
       }
     ],
@@ -292,8 +286,53 @@ sequenceDiagram
 }
 ```
 
+### 5.2 실시간 읽음 처리 (WebSocket Read Command)
+클라이언트가 채팅방 입장 시 또는 메시지 수신 시 명시적으로 읽음 명령을 전송합니다. 서버는 상대방이 보낸 메시지를 읽음 처리하고 Redis를 통해 실시간 알림을 전송합니다.
+
+```mermaid
+sequenceDiagram
+    participant Client as Client (User/Admin)
+    participant WS as ChatWebSocketController
+    participant S as ChatRoomService
+    participant DB as MySQL
+    participant Pub as RedisPublisher
+    participant Redis as Redis Channel
+
+    Client->>WS: SEND /app/chat/{roomId}/read
+    WS->>WS: Extract userId, userType from Session
+    WS->>S: markAsRead(roomId, userId, userType)
+
+    rect rgb(240, 248, 255)
+        Note right of S: Mark Opposite Side Messages as Read
+        S->>DB: markAllAsRead(chatRoomId, senderTypeToMarkRead)
+    end
+
+    alt if markedCount > 0
+        S->>Pub: publishReadNotification(roomId, ReadNotification)
+        Pub->>Redis: PUBLISH chat:read:{roomId}
+    end
+
+    S-->>Client: (Async completion)
+```
+
+#### ✉️ STOMP Frame: SEND (Read Command)
+클라이언트가 읽음 처리를 요청할 때 전송하는 프레임입니다.
+```text
+SEND
+destination:/app/chat/1/read
+content-length:0
+
+^@
+```
+- **destination**: `/app/chat/{roomId}/read`
+- **body**: 없음 (빈 메시지)
+- **호출 시점**:
+  - 채팅방 입장 시 (HTTP API 호출 후)
+  - 메시지 수신 시 (실시간 읽음 처리)
+
 #### ✉️ Redis Publish (Internal) - Read Notification
-채팅방 입장 시 읽음 처리가 발생하면 상대방에게 알림을 전송하는 페이로드입니다.
+읽음 처리가 발생하면 상대방에게 알림을 전송하는 페이로드입니다.
+
 **Channel**: `chat:read:{roomId}`
 ```json
 {
@@ -304,7 +343,7 @@ sequenceDiagram
 ```
 - **readByType**: 누가 읽었는지 ("USER" 또는 "ADMIN")
 
-### 5.2 읽음 알림 전달 (실시간 업데이트)
+### 5.3 읽음 알림 전달 (실시간 업데이트)
 상대방이 메시지를 읽었음(입장함)을 실시간으로 내 화면에 반영합니다.
 
 ```mermaid
@@ -456,6 +495,7 @@ sequenceDiagram
 Redis Subscriber가 배정 알림을 수신하여 `/topic/admin/assignments`를 구독 중인 모든 관리자에게 브로드캐스팅합니다.
 
 #### ✉️ Redis Publish Payload
+
 **Channel**: `chat:admin:assignment`
 ```json
 {
