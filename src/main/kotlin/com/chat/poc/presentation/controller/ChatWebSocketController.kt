@@ -60,4 +60,26 @@ class ChatWebSocketController(
             return null
         }
     }
+
+    /** 메시지 읽음 처리 Client -> /app/chat/{roomId}/read */
+    @MessageMapping("/chat/{roomId}/read")
+    fun readMessage(@DestinationVariable roomId: Long, headerAccessor: SimpMessageHeaderAccessor) {
+        try {
+            val sessionAttributes =
+                    headerAccessor.sessionAttributes
+                            ?: run {
+                                log.warn("No session attributes found")
+                                return
+                            }
+
+            val userId = sessionAttributes[AuthService.SESSION_USER_ID] as? Long
+            val userType = sessionAttributes[AuthService.SESSION_USER_TYPE] as? String
+
+            if (userId != null && userType != null) {
+                chatRoomService.markAsRead(roomId, userId, userType)
+            }
+        } catch (e: Exception) {
+            log.error("Error processing read receipt", e)
+        }
+    }
 }

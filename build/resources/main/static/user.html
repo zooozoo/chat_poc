@@ -107,7 +107,13 @@
                     const msg = JSON.parse(message.body);
                     displayMessage(msg);
                     scrollToBottom();
+
+                    // 메시지 수신 시 읽음 처리
+                    stompClient.send(`/app/chat/${chatRoomId}/read`, {}, {});
                 });
+
+                // 입장(연결) 시 읽음 처리 전송
+                stompClient.send(`/app/chat/${chatRoomId}/read`, {}, {});
 
                 // 2. 읽음 알림 구독
                 stompClient.subscribe(`/topic/chat/${chatRoomId}/read`, (message) => {

@@ -1,22 +1,6 @@
 version: '3.8'
 
 services:
-  app:
-    build: .
-    container_name: chat-poc-app
-    ports:
-      - "8080:8080"
-    environment:
-      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/chat_poc?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Seoul&characterEncoding=UTF-8
-      SPRING_DATASOURCE_USERNAME: chat_user
-      SPRING_DATASOURCE_PASSWORD: chat_password
-      SPRING_DATA_REDIS_HOST: redis
-      SPRING_DATA_REDIS_PORT: 6379
-    depends_on:
-      mysql:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
   mysql:
     image: mysql:8.0
     container_name: chat-poc-mysql

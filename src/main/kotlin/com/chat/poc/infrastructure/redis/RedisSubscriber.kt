@@ -66,8 +66,14 @@ class RedisSubscriber(
     private fun handleReadNotification(channel: String, payload: String) {
         val chatRoomId = channel.removePrefix(RedisPublisher.READ_NOTIFICATION_PREFIX)
         val notification = objectMapper.readValue(payload, ReadNotification::class.java)
+
+        // 1. 채팅방 내부 사용자에게 알림
         messagingTemplate.convertAndSend("/topic/chat/$chatRoomId/read", notification)
-        log.debug("Sent read notification to /topic/chat/$chatRoomId/read")
+
+        // 2. 관리자 목록(Sidebar) 업데이트용 알림 (전체 관리자에게 브로드캐스트)
+        messagingTemplate.convertAndSend("/topic/admin/reads", notification)
+
+        log.debug("Sent read notification to /topic/chat/$chatRoomId/read and /topic/admin/reads")
     }
 
     private fun handleAssignmentNotification(payload: String) {

@@ -33,12 +33,30 @@ sequenceDiagram
 ```
 
 #### ✉️ HTTP Request Spec
-**POST** `/api/admins/login`
+**POST** `/api/users/login` (User 로그인)
+**POST** `/api/admins/login` (Admin 로그인)
+
+**Request Body**:
 ```json
 {
   "email": "admin1@email.com"
 }
 ```
+
+**Response**: `LoginResponse`
+```json
+{
+  "success": true,
+  "data": {
+    "id": 5,
+    "email": "admin1@email.com",
+    "userType": "ADMIN"
+  }
+}
+```
+- **userType**: "USER" 또는 "ADMIN"
+- 이메일이 DB에 없으면 자동으로 생성 후 로그인 처리
+- 세션에 `userId`, `userType`이 저장되고, `JSESSIONID` 쿠키 발급
 
 ---
 
@@ -128,8 +146,8 @@ content-length:45
 ```
 - **destination**: `/app` prefix는 `@MessageMapping`이 처리합니다.
 
-#### ✉️ Redis Publish (Internal)
-서버 내부에서 Redis로 Broadcasting 하는 페이로드입니다.
+#### ✉️ Redis Publish (Internal) - Chat Message
+서버 내부에서 Redis로 Broadcasting 하는 메시지 페이로드입니다.
 **Channel**: `chat:room:1`
 ```json
 {
@@ -141,6 +159,21 @@ content-length:45
   "createdAt": "2026-01-09 16:30:26"
 }
 ```
+
+#### ✉️ Redis Publish (Internal) - Admin Notification
+User가 메시지를 보낼 때 Admin에게 채팅방 업데이트 알림을 전송하는 페이로드입니다.
+**Channel**: `chat:admin:notification`
+```json
+{
+  "chatRoomId": 1,
+  "userEmail": "user1@email.com",
+  "unreadCount": 1,
+  "lastMessageContent": "안녕하세요, 문의드립니다.",
+  "lastMessageAt": "2026-01-09 16:30:26",
+  "assignedAdminId": null
+}
+```
+- **assignedAdminId**: 배정된 Admin의 ID (미배정 시 null)
 
 ### 4.2 메시지 수신 및 전달 (구독자에게)
 Redis Subscriber가 메시지를 수신하여 WebSocket을 통해 접속 중인 클라이언트들에게 전달합니다.
@@ -229,6 +262,48 @@ sequenceDiagram
     S-->>Admin: ChatRoomDetail (Messages + Status)
 ```
 
+#### ✉️ HTTP Request Spec
+**GET** `/api/chatrooms/{id}`
+- **Path Parameter**: `id` (채팅방 ID)
+- **세션 인증 필요**: User 또는 Admin
+- **권한**: User는 본인 채팅방만 접근 가능, Admin은 모든 채팅방 접근 가능
+
+**Response**: `ChatRoomDetailResponse`
+```json
+{
+  "success": true,
+  "data": {
+    "id": 1,
+    "userEmail": "user1@email.com",
+    "assignedAdminEmail": "admin1@email.com",
+    "messages": [
+      {
+        "id": 101,
+        "senderId": 10,
+        "senderType": "USER",
+        "content": "안녕하세요",
+        "isRead": true,
+        "readAt": "2026-01-09 17:00:00",
+        "createdAt": "2026-01-09 16:30:26"
+      }
+    ],
+    "createdAt": "2026-01-09 15:00:00"
+  }
+}
+```
+
+#### ✉️ Redis Publish (Internal) - Read Notification
+채팅방 입장 시 읽음 처리가 발생하면 상대방에게 알림을 전송하는 페이로드입니다.
+**Channel**: `chat:read:{roomId}`
+```json
+{
+  "chatRoomId": 1,
+  "readByType": "ADMIN",
+  "readAt": "2026-01-09 17:00:00"
+}
+```
+- **readByType**: 누가 읽었는지 ("USER" 또는 "ADMIN")
+
 ### 5.2 읽음 알림 전달 (실시간 업데이트)
 상대방이 메시지를 읽었음(입장함)을 실시간으로 내 화면에 반영합니다.
 
@@ -262,7 +337,74 @@ message-id:nx92k-1
 ## 6. 상담사 배정 (Assignment Flow)
 관리자가 미배정 채팅방을 담당자로 배정받는 과정입니다. 다른 관리자들의 화면에서도 해당 방이 '미배정' 목록에서 사라지도록 동기화해야 합니다.
 
-### 6.1 배정 요청 및 알림
+### 6.1 미배정/내 상담 목록 조회
+관리자는 채팅방 목록을 필터링하여 조회할 수 있습니다.
+
+```mermaid
+sequenceDiagram
+    participant Admin as Admin Client
+    participant API as AdminAssignmentController
+    participant S as ChatRoomService
+    participant DB as MySQL
+
+    par 미배정 목록 조회
+        Admin->>API: GET /api/admins/chatrooms/unassigned
+        API->>S: getUnassignedChatRooms()
+        S->>DB: findAllByAdminIsNull()
+        DB-->>S: List<ChatRoom> (admin = null)
+        S-->>Admin: ChatRoomListResponse
+    and 내 담당 목록 조회
+        Admin->>API: GET /api/admins/chatrooms/mine
+        API->>S: getMyChatRooms(adminId)
+        S->>DB: findAllByAdmin(admin)
+        DB-->>S: List<ChatRoom> (admin = adminId)
+        S-->>Admin: ChatRoomListResponse
+    end
+```
+
+#### ✉️ HTTP Request Spec
+**GET** `/api/admins/chatrooms/unassigned`
+- **세션 인증 필요**: Admin
+- **응답**: `ChatRoomListResponse` (admin이 null인 채팅방 목록)
+
+**GET** `/api/admins/chatrooms/mine`
+- **세션 인증 필요**: Admin
+- **응답**: `ChatRoomListResponse` (현재 로그인한 Admin이 배정된 채팅방 목록)
+
+**Response**: `ChatRoomListResponse`
+```json
+{
+  "success": true,
+  "data": {
+    "chatRooms": [
+      {
+        "id": 1,
+        "userId": 10,
+        "userEmail": "user1@email.com",
+        "unreadCount": 3,
+        "lastMessageContent": "문의드립니다",
+        "lastMessageAt": "2026-01-09 16:30:26",
+        "assignedAdminEmail": null,
+        "createdAt": "2026-01-09 15:00:00"
+      },
+      {
+        "id": 2,
+        "userId": 11,
+        "userEmail": "user2@email.com",
+        "unreadCount": 0,
+        "lastMessageContent": "감사합니다",
+        "lastMessageAt": "2026-01-09 14:20:15",
+        "assignedAdminEmail": "admin1@email.com",
+        "createdAt": "2026-01-09 14:00:00"
+      }
+    ]
+  }
+}
+```
+- **unreadCount**: User가 보낸 읽지 않은 메시지 수
+- **assignedAdminEmail**: 배정된 Admin 이메일 (미배정 시 null)
+
+### 6.2 배정 요청 및 알림
 ```mermaid
 sequenceDiagram
     participant AdminA as Admin A (Assigner)
@@ -289,7 +431,28 @@ sequenceDiagram
     Redis->>OtherAdmins: Subscribe & Alert
 ```
 
-### 6.2 배정 알림 수신 (For Sync)
+#### ✉️ HTTP Request Spec
+**POST** `/api/admins/chatrooms/{id}/assign`
+- **Path Parameter**: `id` (채팅방 ID)
+- **세션 인증 필요**: Admin
+- **동작**: 현재 로그인한 Admin을 해당 채팅방의 담당자로 배정
+
+**Request Body**: 없음
+
+**Response**: `ApiResponse<Unit>`
+```json
+{
+  "success": true,
+  "data": null
+}
+```
+
+**Error Cases**:
+- 이미 배정된 채팅방: `400 Bad Request`
+- 채팅방 미존재: `404 Not Found`
+- Admin 미인증: `401 Unauthorized`
+
+### 6.3 배정 알림 수신 (For Sync)
 Redis Subscriber가 배정 알림을 수신하여 `/topic/admin/assignments`를 구독 중인 모든 관리자에게 브로드캐스팅합니다.
 
 #### ✉️ Redis Publish Payload
@@ -317,3 +480,63 @@ subscription:sub-admin-noti
 {"chatRoomId":1,"assignedAdminId":5,"assignedAdminEmail":"admin1@email.com","assignedAt":"..."}
 ^@
 ```
+
+---
+
+## 7. 메시지 페이지네이션 조회 (Message Pagination)
+채팅방 입장 시 전체 메시지가 아닌 페이지 단위로 메시지를 조회할 수 있는 기능입니다. 무한 스크롤 또는 더보기 기능 구현에 활용됩니다.
+
+### 7.1 페이지네이션 조회 프로세스
+```mermaid
+sequenceDiagram
+    participant Client as Client (User/Admin)
+    participant API as ChatRoomController
+    participant S as ChatRoomService
+    participant DB as MySQL
+
+    Client->>API: GET /api/chatrooms/{id}/messages?page=0&size=20
+    API->>API: 세션 인증 확인
+    API->>S: getMessages(id, page, size)
+    S->>DB: findByChatRoomIdOrderByCreatedAtDesc(id, pageable)
+    DB-->>S: Page<Message>
+    S-->>Client: MessageListResponse
+
+    Note over Client: {messages, page, totalPages, hasNext}
+```
+
+#### ✉️ HTTP Request Spec
+**GET** `/api/chatrooms/{id}/messages`
+
+**Query Parameters**:
+- `page` (optional, default=0): 페이지 번호 (0부터 시작)
+- `size` (optional, default=20): 페이지당 메시지 수
+
+**Response**: `MessageListResponse`
+```json
+{
+  "success": true,
+  "data": {
+    "messages": [
+      {
+        "id": 101,
+        "senderId": 10,
+        "senderType": "USER",
+        "content": "안녕하세요",
+        "isRead": true,
+        "readAt": "2026-01-09 17:00:00",
+        "createdAt": "2026-01-09 16:30:26"
+      }
+    ],
+    "page": 0,
+    "size": 20,
+    "totalElements": 45,
+    "totalPages": 3,
+    "hasNext": true
+  }
+}
+```
+
+**Note**:
+- 메시지는 최신순(내림차순)으로 정렬되어 반환됩니다.
+- User는 본인의 채팅방만 조회 가능하며, Admin은 모든 채팅방 조회 가능합니다.
+- 권한이 없는 경우 403 Forbidden을 반환합니다.
