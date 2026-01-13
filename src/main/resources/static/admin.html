@@ -113,8 +113,9 @@
             </div>
 
             <div class="sidebar-tabs">
-                <div class="sidebar-tab active" onclick="switchTab('unassigned')" id="tab-unassigned">미배정 (0)</div>
+                <div class="sidebar-tab active" onclick="switchTab('all')" id="tab-all">전체 (0)</div>
                 <div class="sidebar-tab" onclick="switchTab('mine')" id="tab-mine">내 상담 (0)</div>
+                <div class="sidebar-tab" onclick="switchTab('unassigned')" id="tab-unassigned">미배정 (0)</div>
             </div>
 
             <div id="chatList" class="chat-list-container">
@@ -162,7 +163,7 @@
         let currentSubscription = null;
         let readSubscription = null;
         let currentAdminId = null;
-        let activeTab = 'unassigned'; // 'unassigned' or 'mine'
+        let activeTab = 'all'; // 'all', 'unassigned', or 'mine'
 
         async function init() {
             try {
@@ -206,6 +207,13 @@
                 if (dataMine.success) {
                     updateTabCount('mine', dataMine.data.chatRooms.length);
                 }
+
+                // 전체 카운트
+                const resAll = await fetch('/api/admins/chatrooms');
+                const dataAll = await resAll.json();
+                if (dataAll.success) {
+                    updateTabCount('all', dataAll.data.chatRooms.length);
+                }
             } catch (e) {
                 console.error('Failed to update tab counts', e);
             }
@@ -229,7 +237,11 @@
         }
 
         async function loadChatRooms() {
-            const endpoint = activeTab === 'unassigned' ? '/api/admins/chatrooms/unassigned' : '/api/admins/chatrooms/mine';
+            let endpoint;
+            if (activeTab === 'unassigned') endpoint = '/api/admins/chatrooms/unassigned';
+            else if (activeTab === 'mine') endpoint = '/api/admins/chatrooms/mine';
+            else endpoint = '/api/admins/chatrooms';
+
             const res = await fetch(endpoint);
             const data = await res.json();
 
@@ -241,7 +253,11 @@
 
         function updateTabCount(tab, count) {
             const el = document.getElementById(`tab-${tab}`);
-            const text = tab === 'unassigned' ? '미배정' : '내 상담';
+            let text = '';
+            if (tab === 'unassigned') text = '미배정';
+            else if (tab === 'mine') text = '내 상담';
+            else text = '전체';
+
             el.textContent = `${text} (${count})`;
         }
 
@@ -345,6 +361,11 @@
                     }
                 }
             }
+
+            // 전체 탭인 경우 -> 리로드 (담당자 정보 갱신 등)
+            if (activeTab === 'all') {
+                loadChatRooms();
+            }
         }
 
         function updateChatRoomPreview(noti) {
@@ -381,6 +402,12 @@
                         roomEl.remove();
                         updateTabCount(activeTab, document.querySelectorAll('.chatroom-item').length);
                     }
+                    return;
+                }
+            } else if (activeTab === 'all') {
+                // 전체 탭은 모든 방을 보여주므로 항상 업데이트/추가
+                if (!roomEl) {
+                    loadChatRooms();
                     return;
                 }
             }
