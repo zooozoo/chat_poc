@@ -345,6 +345,9 @@ content-length:0
 
 ### 5.3 읽음 알림 전달 (실시간 업데이트)
 상대방이 메시지를 읽었음(입장함)을 실시간으로 내 화면에 반영합니다.
+읽음 처리 시 **두 가지 경로**로 알림이 전송됩니다:
+1. **채팅방 내부** - 상대방에게 읽음 상태 전달 (`/topic/chat/{roomId}/read`)
+2. **Admin 목록 화면** - 모든 Admin의 채팅방 목록 뱃지 업데이트 (`/topic/admin/reads`)
 
 ```mermaid
 sequenceDiagram
@@ -352,14 +355,23 @@ sequenceDiagram
     participant Sub as RedisSubscriber
     participant STOMP as SimpMessagingTemplate
     participant User as User Client
+    participant AdminList as Admin List (All)
 
     Redis->>Sub: onMessage("chat:read:{roomId}")
-    Sub->>STOMP: convertAndSend("/topic/chat/{roomId}/read", notification)
-    STOMP-->>User: MESSAGE (ReadNotification)
-    User->>User: UI Update (Change 'Unread' to 'Read')
+
+    par 채팅방 내부 알림
+        Sub->>STOMP: convertAndSend("/topic/chat/{roomId}/read")
+        STOMP-->>User: MESSAGE (ReadNotification)
+        User->>User: UI Update (Change 'Unread' to 'Read')
+    and Admin 목록 동기화
+        Sub->>STOMP: convertAndSend("/topic/admin/reads")
+        STOMP-->>AdminList: MESSAGE (ReadNotification)
+        AdminList->>AdminList: Update Badge to 0
+    end
 ```
 
-#### ✉️ STOMP Frame: MESSAGE (Read Notification)
+#### ✉️ STOMP Frame: MESSAGE (Read Notification - 채팅방 내부)
+채팅방에 입장한 상대방에게 전달되는 읽음 알림입니다.
 ```text
 MESSAGE
 destination:/topic/chat/1/read
@@ -369,6 +381,60 @@ message-id:nx92k-1
 
 {"chatRoomId":1,"readByType":"ADMIN","readAt":"2026-01-09 17:00:00"}
 ^@
+```
+
+#### ✉️ STOMP Frame: MESSAGE (Read Notification - Admin 목록)
+모든 Admin의 채팅방 목록 화면에 브로드캐스트되는 읽음 알림입니다.
+
+**목적**: Admin이 채팅방에 입장하여 메시지를 읽으면, 다른 Admin(또는 같은 Admin의 다른 브라우저 탭)의 채팅방 목록에서 해당 방의 미읽음 뱃지를 실시간으로 0으로 업데이트합니다.
+
+**시나리오 예시**:
+- Admin1이 "미배정" 탭에서 채팅방 목록을 보고 있음 (채팅방 ID 1의 뱃지: 5개 미읽음)
+- Admin1이 다른 브라우저 탭 또는 Admin2가 채팅방 1에 입장하여 메시지를 읽음
+- "미배정" 탭의 채팅방 1 뱃지가 실시간으로 0으로 변경됨 (페이지 새로고침 불필요)
+
+```text
+MESSAGE
+destination:/topic/admin/reads
+content-type:application/json
+subscription:sub-admin-reads
+
+{"chatRoomId":1,"readByType":"ADMIN","readAt":"2026-01-09 17:00:00"}
+^@
+```
+
+**Backend 구현** (RedisSubscriber.kt:66-77):
+```kotlin
+private fun handleReadNotification(channel: String, payload: String) {
+    val chatRoomId = channel.removePrefix(RedisPublisher.READ_NOTIFICATION_PREFIX)
+    val notification = objectMapper.readValue(payload, ReadNotification::class.java)
+
+    // 1. 채팅방 내부 사용자에게 알림
+    messagingTemplate.convertAndSend("/topic/chat/$chatRoomId/read", notification)
+
+    // 2. 관리자 목록(Sidebar) 업데이트용 알림
+    messagingTemplate.convertAndSend("/topic/admin/reads", notification)
+}
+```
+
+**Frontend 구독 및 처리** (admin.html:318-335):
+```javascript
+// 읽음 알림(목록 갱신용) 구독
+stompClient.subscribe('/topic/admin/reads', (message) => {
+    const noti = JSON.parse(message.body);
+    handleReadNotificationForList(noti);
+});
+
+function handleReadNotificationForList(noti) {
+    // Admin이 읽었으므로 뱃지를 0으로 변경
+    if (noti.readByType === 'ADMIN') {
+        const badge = document.getElementById(`badge-${noti.chatRoomId}`);
+        if (badge) {
+            badge.textContent = '0';
+            badge.classList.add('hidden');
+        }
+    }
+}
 ```
 
 ---
@@ -580,3 +646,470 @@ sequenceDiagram
 - 메시지는 최신순(내림차순)으로 정렬되어 반환됩니다.
 - User는 본인의 채팅방만 조회 가능하며, Admin은 모든 채팅방 조회 가능합니다.
 - 권한이 없는 경우 403 Forbidden을 반환합니다.
+
+---
+
+## 8. WebSocket 구독 채널 및 실시간 통신 흐름 (Real-time Communication Flow)
+이 섹션에서는 User와 Admin 화면에서 WebSocket을 통해 어떤 채널을 구독하고, 어떤 메시지를 전송하는지 전체적으로 정리합니다. 실시간 동기화가 어떻게 이루어지는지 시나리오별로 이해할 수 있습니다.
+
+### 8.1 WebSocket 연결 개요
+Chat POC는 **STOMP over WebSocket** 프로토콜을 사용하여 실시간 양방향 통신을 구현합니다.
+
+#### 연결 엔드포인트
+- **URL**: `/ws`
+- **프로토콜**: STOMP 1.1/1.0
+- **Fallback**: SockJS (WebSocket 미지원 환경)
+- **인증**: HTTP 세션 기반 (WebSocketHandshakeInterceptor를 통해 WebSocket 세션으로 전달)
+
+#### 메시지 브로커 구조
+
+| 방향 | Prefix | 용도 | 예시 | 처리 위치 |
+|------|--------|------|------|-----------|
+| Client → Server | `/app` | 메시지 전송, 읽음 처리 요청 | `/app/chat/1/send` | ChatWebSocketController |
+| Server → Client | `/topic` | 실시간 알림, 브로드캐스트 | `/topic/chat/1` | RedisSubscriber → SimpMessagingTemplate |
+
+**주요 특징**:
+- `/app` prefix는 `@MessageMapping`으로 매핑되어 서버 비즈니스 로직을 실행합니다.
+- `/topic` prefix는 Pub/Sub 패턴으로 다수의 클라이언트에게 동시에 메시지를 전달합니다.
+- Redis Pub/Sub를 통해 다중 서버 환경에서도 실시간 메시지가 모든 인스턴스로 전파됩니다.
+
+---
+
+### 8.2 User 화면 WebSocket 통신
+User는 채팅방에 입장할 때 WebSocket에 연결하고, 2개의 채널을 구독합니다.
+
+#### 연결 시점
+**위치**: `user.html:90-126`
+- 채팅방 조회 API (`GET /api/users/chatroom`) 호출 후 WebSocket 연결
+- 채팅방 ID를 받아 연결 및 구독 수행
+
+#### 구독 채널 (2개)
+
+| 채널 | 목적 | 수신 시 처리 | 코드 위치 |
+|------|------|-------------|-----------|
+| `/topic/chat/{roomId}` | 실시간 채팅 메시지 수신 | 메시지 화면에 추가, 자동 스크롤, 자동 읽음 처리 | user.html:106 |
+| `/topic/chat/{roomId}/read` | 상대방(Admin) 읽음 알림 | 내가 보낸 메시지에 "읽음" 표시 | user.html:119 |
+
+**구독 코드 예시** (user.html:106-121):
+```javascript
+// 1. 채팅 메시지 구독
+stompClient.subscribe(`/topic/chat/${chatRoomId}`, (message) => {
+    const msg = JSON.parse(message.body);
+    displayMessage(msg);
+    scrollToBottom();
+
+    // 메시지 수신 시 읽음 처리
+    stompClient.send(`/app/chat/${chatRoomId}/read`, {}, {});
+});
+
+// 2. 읽음 알림 구독
+stompClient.subscribe(`/topic/chat/${chatRoomId}/read`, (message) => {
+    markAllAsRead();
+});
+```
+
+#### 전송 엔드포인트 (2개)
+
+| Destination | Payload | 트리거 | 코드 위치 |
+|-------------|---------|--------|-----------|
+| `/app/chat/{roomId}/send` | `{"content": "메시지 내용"}` | 전송 버튼 클릭 또는 Enter 키 | user.html:137 |
+| `/app/chat/{roomId}/read` | 없음 (빈 메시지) | 채팅방 입장 시, 메시지 수신 시 | user.html:112, 116 |
+
+**전송 코드 예시** (user.html:137-139):
+```javascript
+// 메시지 전송
+stompClient.send(`/app/chat/${chatRoomId}/send`, {}, JSON.stringify({
+    content: content
+}));
+```
+
+**읽음 처리 코드** (user.html:112, 116):
+```javascript
+// 입장 시 읽음 처리
+stompClient.send(`/app/chat/${chatRoomId}/read`, {}, {});
+
+// 메시지 수신 시 자동 읽음 처리
+stompClient.send(`/app/chat/${chatRoomId}/read`, {}, {});
+```
+
+#### WebSocket 통신 흐름도
+
+```mermaid
+sequenceDiagram
+    participant User as User Client
+    participant WS as WebSocket (/ws)
+    participant Server as ChatWebSocketController
+    participant Redis as Redis Pub/Sub
+
+    Note over User: 채팅방 입장
+    User->>WS: Connect /ws
+    WS->>User: CONNECTED
+
+    User->>WS: SUBSCRIBE /topic/chat/{roomId}
+    User->>WS: SUBSCRIBE /topic/chat/{roomId}/read
+
+    Note over User: 입장 시 자동 읽음 처리
+    User->>Server: SEND /app/chat/{roomId}/read
+    Server->>Redis: Publish read notification
+
+    Note over User: 메시지 전송
+    User->>Server: SEND /app/chat/{roomId}/send
+    Server->>Redis: Publish message
+    Redis-->>User: MESSAGE /topic/chat/{roomId}
+
+    Note over User: Admin이 메시지 읽음
+    Redis-->>User: MESSAGE /topic/chat/{roomId}/read
+    User->>User: markAllAsRead() 실행
+```
+
+---
+
+### 8.3 Admin 화면 WebSocket 통신
+Admin은 페이지 로드 시 WebSocket에 연결하여 **목록 화면**에서 3개의 채널을 구독하고, **채팅방 입장** 시 추가로 2개의 채널을 구독합니다.
+
+#### 연결 시점
+**위치**: `admin.html:290-324`
+- 페이지 로드 시 WebSocket 연결
+- 채팅방 목록 화면에서 상시 연결 유지
+- 채팅방 입장 시 해당 채팅방의 구독 채널 추가
+
+#### 구독 채널 (총 5개)
+
+##### 목록 화면 (3개) - 상시 구독
+
+| 채널 | 목적 | 수신 시 처리 | 코드 위치 |
+|------|------|-------------|-----------|
+| `/topic/admin/chatrooms` | 새로운 메시지 알림 | 미읽음 수 증가, 최근 메시지 미리보기 갱신 | admin.html:303 |
+| `/topic/admin/reads` | 읽음 상태 동기화 | 미읽음 뱃지를 0으로 변경 | admin.html:318 |
+| `/topic/admin/assignments` | 배정 알림 | "내 상담" 탭에 추가 또는 "미배정" 탭에서 제거 | admin.html:312 |
+
+**목록 화면 구독 코드** (admin.html:303-321):
+```javascript
+// 1. 새로운 메시지 알림 구독
+stompClient.subscribe('/topic/admin/chatrooms', (message) => {
+    const noti = JSON.parse(message.body);
+    updateChatRoomPreview(noti);
+});
+
+// 2. 배정 알림 구독
+stompClient.subscribe('/topic/admin/assignments', (message) => {
+    const noti = JSON.parse(message.body);
+    handleAssignmentNotification(noti);
+});
+
+// 3. 읽음 알림(목록 갱신용) 구독
+stompClient.subscribe('/topic/admin/reads', (message) => {
+    const noti = JSON.parse(message.body);
+    handleReadNotificationForList(noti);
+});
+```
+
+##### 채팅방 내부 (2개) - 채팅방 입장 시 구독
+
+| 채널 | 목적 | 수신 시 처리 | 코드 위치 |
+|------|------|-------------|-----------|
+| `/topic/chat/{roomId}` | 실시간 채팅 메시지 수신 | 메시지 화면에 추가, 자동 스크롤, 자동 읽음 처리 | admin.html:480 |
+| `/topic/chat/{roomId}/read` | 상대방(User) 읽음 알림 | 내가 보낸 메시지에 "읽음" 표시 | admin.html:494 |
+
+**채팅방 내부 구독 코드** (admin.html:480-495):
+```javascript
+// 메시지 구독 (User와 동일)
+messageSubscription = stompClient.subscribe(`/topic/chat/${roomId}`, (message) => {
+    const msg = JSON.parse(message.body);
+    displayMessage(msg);
+    scrollToBottom();
+
+    // 메시지 수신 시 읽음 처리
+    stompClient.send(`/app/chat/${roomId}/read`, {}, {});
+});
+
+// 읽음 알림 구독 (User와 동일)
+readSubscription = stompClient.subscribe(`/topic/chat/${roomId}/read`, (message) => {
+    markAllAsRead();
+});
+```
+
+#### 전송 엔드포인트 (2개) - User와 동일
+
+| Destination | Payload | 트리거 | 코드 위치 |
+|-------------|---------|--------|-----------|
+| `/app/chat/{roomId}/send` | `{"content": "메시지 내용"}` | 전송 버튼 클릭 또는 Enter 키 | admin.html:559 |
+| `/app/chat/{roomId}/read` | 없음 (빈 메시지) | 채팅방 입장 시, 메시지 수신 시 | admin.html:487, 491 |
+
+#### WebSocket 통신 흐름도 (목록 화면)
+
+```mermaid
+sequenceDiagram
+    participant Admin as Admin Client
+    participant WS as WebSocket (/ws)
+    participant Redis as Redis Pub/Sub
+    participant OtherAdmin as Other Admin
+
+    Note over Admin: 페이지 로드
+    Admin->>WS: Connect /ws
+    WS->>Admin: CONNECTED
+
+    Note over Admin: 목록 화면 구독
+    Admin->>WS: SUBSCRIBE /topic/admin/chatrooms
+    Admin->>WS: SUBSCRIBE /topic/admin/reads
+    Admin->>WS: SUBSCRIBE /topic/admin/assignments
+
+    Note over Admin: User가 메시지 전송
+    Redis-->>Admin: MESSAGE /topic/admin/chatrooms
+    Admin->>Admin: updateChatRoomPreview() - 미읽음 수 증가
+
+    Note over OtherAdmin: Other Admin이 메시지 읽음
+    Redis-->>Admin: MESSAGE /topic/admin/reads
+    Admin->>Admin: 뱃지 0으로 변경
+
+    Note over OtherAdmin: Other Admin이 방 배정
+    Redis-->>Admin: MESSAGE /topic/admin/assignments
+    Admin->>Admin: handleAssignmentNotification() - 미배정 목록에서 제거
+```
+
+#### 구독 채널 비교 (User vs Admin)
+
+| 화면 | User | Admin |
+|------|------|-------|
+| **목록 화면** | 없음 | `/topic/admin/chatrooms`<br>`/topic/admin/reads`<br>`/topic/admin/assignments` |
+| **채팅방 내부** | `/topic/chat/{roomId}`<br>`/topic/chat/{roomId}/read` | `/topic/chat/{roomId}`<br>`/topic/chat/{roomId}/read`<br>(User와 동일) |
+| **전송** | `/app/chat/{roomId}/send`<br>`/app/chat/{roomId}/read` | `/app/chat/{roomId}/send`<br>`/app/chat/{roomId}/read`<br>(User와 동일) |
+
+**주요 차이점**:
+- Admin은 목록 화면에서 **3개의 추가 채널**을 구독하여 실시간 동기화를 수행합니다.
+- 채팅방 내부에서는 User와 Admin의 WebSocket 통신이 **동일**합니다.
+- Admin은 WebSocket 연결을 **상시 유지**하며, User는 채팅방 입장 시에만 연결합니다.
+
+---
+
+### 8.4 실시간 동기화 시나리오
+실제 사용 시나리오를 통해 WebSocket 메시지 흐름과 각 화면에 미치는 영향을 파악할 수 있습니다.
+
+#### 시나리오 1: User가 메시지 전송
+
+**전제 조건**:
+- User가 채팅방에 입장하여 WebSocket 연결됨
+- Admin1이 목록 화면을 보고 있음 (WebSocket 연결됨)
+- Admin2가 해당 채팅방에 입장하여 대화 중
+
+**흐름**:
+1. User가 `/app/chat/1/send` 전송 (ChatWebSocketController.kt:26)
+2. Backend가 메시지 저장 (MessageService.kt:43-52)
+3. Backend가 Redis 발행 (MessageService.kt:69)
+   - `chat:room:1` 채널로 메시지 발행
+   - `chat:admin:notification` 채널로 Admin 알림 발행 (MessageService.kt:72-84)
+4. RedisSubscriber가 수신하여 브로드캐스트 (RedisSubscriber.kt:53-64)
+   - `/topic/chat/1` → User, Admin2에게 메시지 전달
+   - `/topic/admin/chatrooms` → Admin1, Admin2 목록 업데이트
+
+**영향 받는 화면**:
+- ✅ **User 채팅방**: 내 메시지가 즉시 화면에 표시됨
+- ✅ **Admin2 채팅방**: 상대방 메시지가 즉시 표시되고, 자동 읽음 처리 전송
+- ✅ **Admin1 목록**: 해당 채팅방의 미읽음 수 증가, 최근 메시지 갱신
+- ✅ **Admin2 목록**: 해당 채팅방의 미읽음 수 증가, 최근 메시지 갱신
+
+```mermaid
+sequenceDiagram
+    participant User as User (채팅방)
+    participant Backend as Backend
+    participant Redis as Redis
+    participant Admin1 as Admin1 (목록)
+    participant Admin2 as Admin2 (채팅방)
+
+    User->>Backend: SEND /app/chat/1/send
+    Backend->>Redis: Publish chat:room:1
+    Backend->>Redis: Publish chat:admin:notification
+
+    par 채팅방 참여자에게 메시지 전달
+        Redis-->>User: MESSAGE /topic/chat/1
+        Redis-->>Admin2: MESSAGE /topic/chat/1
+    and Admin 목록 업데이트
+        Redis-->>Admin1: MESSAGE /topic/admin/chatrooms
+        Redis-->>Admin2: MESSAGE /topic/admin/chatrooms
+    end
+
+    Note over Admin2: 메시지 수신 후 자동 읽음 처리
+    Admin2->>Backend: SEND /app/chat/1/read
+```
+
+---
+
+#### 시나리오 2: Admin이 메시지 읽음
+
+**전제 조건**:
+- User가 채팅방에 있음 (메시지 3개 전송, 미읽음 상태)
+- Admin1이 목록 화면을 보고 있음 (해당 채팅방 뱃지: 3)
+- Admin2가 해당 채팅방에 입장함
+
+**흐름**:
+1. Admin2가 채팅방 입장 시 `/app/chat/1/read` 전송 (admin.html:491)
+2. Backend가 읽음 처리 (ChatRoomService.kt:138)
+   - SenderType.USER인 메시지를 모두 읽음 처리
+3. Backend가 Redis 발행 (ChatRoomService.kt:148)
+   - `chat:read:1` 채널로 읽음 알림 발행
+4. RedisSubscriber가 수신하여 브로드캐스트 (RedisSubscriber.kt:66-77)
+   - `/topic/chat/1/read` → User에게 읽음 알림
+   - `/topic/admin/reads` → Admin1, Admin2 목록에 읽음 상태 동기화
+
+**영향 받는 화면**:
+- ✅ **User 채팅방**: 내가 보낸 3개 메시지에 "읽음" 표시
+- ✅ **Admin2 채팅방**: 변화 없음 (이미 읽음 처리 완료)
+- ✅ **Admin1 목록**: 해당 채팅방 뱃지가 3 → 0으로 변경
+- ✅ **Admin2 목록** (다른 탭): 해당 채팅방 뱃지가 3 → 0으로 변경
+
+```mermaid
+sequenceDiagram
+    participant User as User (채팅방)
+    participant Admin2 as Admin2 (입장)
+    participant Backend as Backend
+    participant Redis as Redis
+    participant Admin1 as Admin1 (목록)
+
+    Note over Admin2: 채팅방 입장 시 읽음 처리
+    Admin2->>Backend: SEND /app/chat/1/read
+    Backend->>Backend: markAllAsRead(SenderType.USER)
+    Backend->>Redis: Publish chat:read:1
+
+    par 읽음 알림 전달
+        Redis-->>User: MESSAGE /topic/chat/1/read
+        User->>User: markAllAsRead() - "읽음" 표시
+    and Admin 목록 동기화
+        Redis-->>Admin1: MESSAGE /topic/admin/reads
+        Admin1->>Admin1: 뱃지 0으로 변경
+        Redis-->>Admin2: MESSAGE /topic/admin/reads
+        Admin2->>Admin2: 뱃지 0으로 변경 (다른 탭)
+    end
+```
+
+---
+
+#### 시나리오 3: 채팅방 배정
+
+**전제 조건**:
+- 미배정 채팅방이 존재함 (채팅방 ID: 1)
+- Admin1이 "미배정" 탭을 보고 있음
+- Admin2가 "미배정" 탭을 보고 있음
+
+**흐름**:
+1. Admin1이 `POST /api/admins/chatrooms/1/assign` 호출 (AdminAssignmentController.kt:31)
+2. Backend가 배정 처리 (ChatRoomService.kt:194-210)
+   - chatRoom.admin = Admin1로 설정
+3. Backend가 Redis 발행 (ChatRoomService.kt:222)
+   - `chat:admin:assignment` 채널로 배정 알림 발행
+4. RedisSubscriber가 수신하여 브로드캐스트 (RedisSubscriber.kt:79-84)
+   - `/topic/admin/assignments` → 모든 Admin에게 배정 알림
+
+**영향 받는 화면**:
+- ✅ **Admin1 (자신)**: "내 상담" 탭에 추가 (또는 목록 새로고침)
+- ✅ **Admin2 (타인)**: "미배정" 탭에서 즉시 제거
+
+```mermaid
+sequenceDiagram
+    participant Admin1 as Admin1 (미배정 탭)
+    participant Backend as Backend
+    participant Redis as Redis
+    participant Admin2 as Admin2 (미배정 탭)
+
+    Note over Admin1: 배정 버튼 클릭
+    Admin1->>Backend: POST /api/admins/chatrooms/1/assign
+    Backend->>Backend: chatRoom.admin = Admin1
+    Backend->>Redis: Publish chat:admin:assignment
+
+    par 배정 알림 전달
+        Redis-->>Admin1: MESSAGE /topic/admin/assignments
+        Admin1->>Admin1: handleAssignmentNotification()
+        Admin1->>Admin1: "내 상담" 탭에 추가
+    and
+        Redis-->>Admin2: MESSAGE /topic/admin/assignments
+        Admin2->>Admin2: handleAssignmentNotification()
+        Admin2->>Admin2: "미배정" 탭에서 제거
+    end
+```
+
+---
+
+#### 시나리오 4: User와 Admin이 동시에 채팅
+
+**전제 조건**:
+- User가 채팅방에 입장함
+- Admin이 채팅방에 입장함
+- 두 사람이 실시간으로 대화 중
+
+**흐름**:
+1. **User 메시지 전송**
+   - User → `/app/chat/1/send`
+   - Backend → Redis → `/topic/chat/1`
+   - Admin 메시지 수신 → 자동 읽음 처리 → `/app/chat/1/read`
+   - Backend → Redis → `/topic/chat/1/read`, `/topic/admin/reads`
+   - User가 "읽음" 표시 확인
+
+2. **Admin 응답 전송**
+   - Admin → `/app/chat/1/send`
+   - Backend → Redis → `/topic/chat/1`
+   - User 메시지 수신 → 자동 읽음 처리 → `/app/chat/1/read`
+   - Backend → Redis → `/topic/chat/1/read`, `/topic/admin/reads`
+   - Admin이 "읽음" 표시 확인
+
+**실시간 동기화 효과**:
+- ✅ 양방향 메시지가 **즉시 전달**됨 (지연 없음)
+- ✅ 읽음 상태가 **실시간으로 반영**됨
+- ✅ Admin 목록의 미읽음 수가 **실시간으로 업데이트**됨
+- ✅ 다른 Admin이 보는 목록도 **동시에 동기화**됨
+
+```mermaid
+sequenceDiagram
+    participant User as User
+    participant Backend as Backend
+    participant Redis as Redis
+    participant Admin as Admin
+    participant AdminList as Admin (목록-다른 탭)
+
+    rect rgb(240, 248, 255)
+        Note over User,AdminList: 1. User 메시지 전송
+        User->>Backend: SEND /app/chat/1/send
+        Backend->>Redis: Publish message
+
+        par 메시지 전달
+            Redis-->>User: /topic/chat/1
+            Redis-->>Admin: /topic/chat/1
+        and 목록 업데이트
+            Redis-->>AdminList: /topic/admin/chatrooms (미읽음 수 증가)
+        end
+
+        Admin->>Backend: SEND /app/chat/1/read (자동)
+        Backend->>Redis: Publish read notification
+
+        par 읽음 알림
+            Redis-->>User: /topic/chat/1/read (읽음 표시)
+        and
+            Redis-->>AdminList: /topic/admin/reads (뱃지 0)
+        end
+    end
+
+    rect rgb(255, 248, 240)
+        Note over User,AdminList: 2. Admin 응답 전송
+        Admin->>Backend: SEND /app/chat/1/send
+        Backend->>Redis: Publish message
+
+        Redis-->>User: /topic/chat/1
+        Redis-->>Admin: /topic/chat/1
+
+        User->>Backend: SEND /app/chat/1/read (자동)
+        Backend->>Redis: Publish read notification
+
+        Redis-->>Admin: /topic/chat/1/read (읽음 표시)
+    end
+
+    Note over User,AdminList: 실시간 양방향 통신 완료
+```
+
+---
+
+#### 시나리오 요약표
+
+| 시나리오 | 트리거 | 발행 채널 | 영향 받는 화면 |
+|----------|--------|-----------|---------------|
+| **User 메시지 전송** | User가 메시지 전송 | `chat:room:{id}`<br>`chat:admin:notification` | User 채팅방, Admin 채팅방, Admin 목록 (모든 Admin) |
+| **Admin 메시지 읽음** | Admin이 채팅방 입장 | `chat:read:{id}` | User 채팅방 (읽음 표시), Admin 목록 (모든 Admin, 뱃지 0) |
+| **채팅방 배정** | Admin이 배정 버튼 클릭 | `chat:admin:assignment` | Admin1 목록 ("내 상담" 추가), Admin2 목록 ("미배정" 제거) |
+| **실시간 대화** | User ↔ Admin 메시지 교환 | 위 모든 채널 조합 | 모든 화면 실시간 동기화 |

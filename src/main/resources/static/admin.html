@@ -11,7 +11,7 @@
     <style>
         .admin-layout {
             display: grid;
-            grid-template-columns: 350px 1fr;
+            grid-template-columns: 500px 1fr;
             gap: 20px;
             height: calc(100vh - 40px);
             margin: 20px auto;
@@ -98,6 +98,19 @@
 
         .assign-btn:hover {
             background: var(--primary-dark);
+        }
+
+        .assigned-admin {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-left: 4px;
+            white-space: nowrap;
+        }
+
+        .chatroom-name {
+            display: flex;
+            align-items: center;
+            flex-wrap: nowrap;
         }
     </style>
 </head>
@@ -279,7 +292,10 @@
                 div.innerHTML = `
                     <div class="chatroom-avatar">${room.userEmail[0].toUpperCase()}</div>
                     <div class="chatroom-info">
-                        <div class="chatroom-name">${room.userEmail}</div>
+                        <div class="chatroom-name">
+                            ${room.userEmail}
+                            ${room.assignedAdminEmail ? `<span class="assigned-admin">담당자: ${room.assignedAdminEmail}</span>` : ''}
+                        </div>
                         <div class="chatroom-preview" id="preview-${room.id}">${room.lastMessageContent || '대화 없음'}</div>
                     </div>
                     <div class="chatroom-meta">
