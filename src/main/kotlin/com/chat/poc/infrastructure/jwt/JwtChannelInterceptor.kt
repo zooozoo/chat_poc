@@ -3,6 +3,7 @@ package com.chat.poc.infrastructure.jwt
 import org.slf4j.LoggerFactory
 import org.springframework.messaging.Message
 import org.springframework.messaging.MessageChannel
+import org.springframework.messaging.MessageDeliveryException
 import org.springframework.messaging.simp.stomp.StompCommand
 import org.springframework.messaging.simp.stomp.StompHeaderAccessor
 import org.springframework.messaging.support.ChannelInterceptor
@@ -38,20 +39,25 @@ class JwtChannelInterceptor(private val jwtTokenProvider: JwtTokenProvider) : Ch
                     val userType = jwtTokenProvider.getUserType(token)
 
                     // sessionAttributes에 사용자 정보 저장 (ChatWebSocketController에서 사용)
-                    accessor.sessionAttributes = accessor.sessionAttributes ?: mutableMapOf()
-                    accessor.sessionAttributes!![ATTR_USER_ID] = userId
-                    accessor.sessionAttributes!![ATTR_USER_TYPE] = userType
+                    // HashMap으로 생성 후 명시적 재할당하여 WebSocket 세션에 바인딩
+                    val sessionAttrs = accessor.sessionAttributes ?: HashMap<String, Any>()
+                    sessionAttrs[ATTR_USER_ID] = userId
+                    sessionAttrs[ATTR_USER_TYPE] = userType
+                    accessor.sessionAttributes = sessionAttrs
+
+                    // Principal 설정 (추가 보안 레이어)
+                    accessor.user = JwtUserPrincipal(userId, userType)
 
                     log.info(
                             "[WS ✓] STOMP CONNECT authenticated - userId: $userId, userType: $userType"
                     )
                 } else {
                     log.warn("[WS ✗] Invalid JWT token in STOMP CONNECT")
-                    // 연결 거부하려면 null 반환 또는 예외 발생
-                    // POC이므로 일단 로그만 남기고 진행
+                    throw MessageDeliveryException("Invalid JWT token")
                 }
             } else {
                 log.warn("[WS ⚠] No Authorization header in STOMP CONNECT")
+                throw MessageDeliveryException("No Authorization header")
             }
         }
 
