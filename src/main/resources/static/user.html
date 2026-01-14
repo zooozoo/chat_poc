@@ -163,7 +163,9 @@
                 document.getElementById('sendBtn').disabled = false;
 
             }, (error) => {
-                console.error('STOMP error', error);
+                console.error('WebSocket connection failed:', error);
+                alert('채팅 연결에 실패했습니다. 다시 로그인해 주세요.');
+                logout();
             });
         }
 

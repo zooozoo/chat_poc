@@ -7,6 +7,65 @@
 
 ---
 
+## 0. 연결 (Connection)
+
+WebSocket 연결 후 STOMP 프로토콜로 통신을 시작하기 위해 `CONNECT` 프레임을 전송해야 합니다.
+**인증 토큰은 이 단계에서만 전송**하며, 이후 메시지에는 별도의 인증 헤더가 필요하지 않습니다.
+
+> **⚠️ 주의**: `Authorization` 헤더가 없거나 토큰이 유효하지 않으면 **연결이 거부**됩니다.
+
+### 0-1. WebSocket 연결
+*   **Endpoint**: `/ws` (SockJS) 또는 `/ws` (Pure WebSocket)
+
+### 0-2. STOMP CONNECT (Front -> Server)
+*   **Command**: `CONNECT`
+*   **Headers**:
+    *   `Authorization`: `Bearer {accessToken}` **(필수)**
+    *   `accept-version`: `1.1,1.2`
+    *   `heart-beat`: `10000,10000` (선택)
+
+**STOMP Frame Example:**
+```stomp
+CONNECT
+Authorization:Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+accept-version:1.1,1.2
+heart-beat:10000,10000
+
+^@
+```
+
+### 0-3. STOMP CONNECTED (Server -> Front) - 성공
+*   **Command**: `CONNECTED`
+*   **Headers**:
+    *   `version`: `1.1` 또는 `1.2`
+    *   `heart-beat`: `0,0` (서버 설정에 따름)
+
+**STOMP Frame Example:**
+```stomp
+CONNECTED
+version:1.1
+heart-beat:0,0
+
+^@
+```
+
+### 0-4. STOMP ERROR (Server -> Front) - 실패
+토큰이 없거나 유효하지 않은 경우 서버가 ERROR 프레임을 전송하고 연결을 종료합니다.
+
+*   **Command**: `ERROR`
+*   **Headers**:
+    *   `message`: 에러 메시지
+
+**STOMP Frame Example:**
+```stomp
+ERROR
+message:Invalid JWT token
+
+^@
+```
+
+---
+
 ## 1. 채팅방 (User, Admin 공통)
 
 채팅방 내부에서 실시간 대화와 읽음 처리를 위해 사용합니다.
