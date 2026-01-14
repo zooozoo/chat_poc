@@ -1,3 +1,8 @@
+# JWT 설정
+jwt:
+  secret: chat-poc-jwt-secret-key-for-signing-minimum-32-characters-long
+  expiration: 86400000  # 24시간 (밀리초)
+
 spring:
   application:
     name: chat-poc
@@ -23,16 +28,11 @@ spring:
       maximum-pool-size: 10
       minimum-idle: 5
   
-  # Redis 설정
+  # Redis 설정 (Pub/Sub용)
   data:
     redis:
       host: localhost
       port: 6379
-  
-  # Session 설정 (Redis 기반)
-  session:
-    store-type: redis
-    timeout: 3600s
 
 server:
   port: 8080

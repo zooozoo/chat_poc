@@ -46,21 +46,52 @@
         let chatRoomId = null;
         let myEmail = null;
 
+        // JWT 토큰 헬퍼 함수
+        function getAccessToken() {
+            return localStorage.getItem('accessToken');
+        }
+
+        function getAuthHeaders() {
+            const token = getAccessToken();
+            return token ? { 'Authorization': 'Bearer ' + token } : {};
+        }
+
+        async function fetchWithAuth(url, options = {}) {
+            options.headers = { ...options.headers, ...getAuthHeaders() };
+            const response = await fetch(url, options);
+            if (response.status === 401 || response.status === 403) {
+                // 인증 실패 시 로그인 페이지로 이동
+                logout();
+                return null;
+            }
+            return response;
+        }
+
         async function init() {
+            // 토큰 확인
+            if (!getAccessToken()) {
+                window.location.href = '/index.html';
+                return;
+            }
+
             try {
                 // 1. 내 정보 조회
-                const userRes = await fetch('/api/users/me');
+                const userRes = await fetchWithAuth('/api/users/me');
+                if (!userRes) return;
+
                 const userData = await userRes.json();
 
                 if (!userData.success) {
-                    window.location.href = '/_';
+                    window.location.href = '/index.html';
                     return;
                 }
                 myEmail = userData.data.email;
                 document.getElementById('userEmail').textContent = myEmail;
 
                 // 2. 채팅방 조회 (없으면 자동생성)
-                const roomRes = await fetch('/api/users/chatroom');
+                const roomRes = await fetchWithAuth('/api/users/chatroom');
+                if (!roomRes) return;
+
                 const roomData = await roomRes.json();
 
                 if (roomData.success) {
@@ -78,7 +109,9 @@
         }
 
         async function enterChatRoom() {
-            const res = await fetch(`/api/chatrooms/${chatRoomId}`);
+            const res = await fetchWithAuth(`/api/chatrooms/${chatRoomId}`);
+            if (!res) return;
+
             const data = await res.json();
 
             if (data.success) {
@@ -99,7 +132,12 @@
             stompClient = Stomp.over(socket);
             stompClient.debug = null; // 디버그 로그 끄기
 
-            stompClient.connect({}, (frame) => {
+            // STOMP CONNECT 시 Authorization 헤더 전달
+            const connectHeaders = {
+                'Authorization': 'Bearer ' + getAccessToken()
+            };
+
+            stompClient.connect(connectHeaders, (frame) => {
                 console.log('Connected: ' + frame);
 
                 // 1. 채팅 메시지 구독
@@ -185,8 +223,8 @@
         }
 
         function logout() {
-            fetch('/api/users/logout', { method: 'POST' })
-                .then(() => window.location.href = '/index.html');
+            localStorage.removeItem('accessToken');
+            window.location.href = '/index.html';
         }
 
         // Enter 키 처리

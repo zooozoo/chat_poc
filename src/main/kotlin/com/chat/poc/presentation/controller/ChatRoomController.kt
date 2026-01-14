@@ -1,31 +1,24 @@
 package com.chat.poc.presentation.controller
 
-import com.chat.poc.application.service.AuthService
 import com.chat.poc.application.service.ChatRoomService
+import com.chat.poc.infrastructure.jwt.JwtUserPrincipal
 import com.chat.poc.presentation.dto.*
-import jakarta.servlet.http.HttpSession
 import org.springframework.http.ResponseEntity
+import org.springframework.security.core.annotation.AuthenticationPrincipal
 import org.springframework.web.bind.annotation.*
 
 @RestController
 @RequestMapping("/api/chatrooms")
-class ChatRoomController(
-        private val chatRoomService: ChatRoomService,
-        private val authService: AuthService
-) {
+class ChatRoomController(private val chatRoomService: ChatRoomService) {
 
     /** 채팅방 입장 (정보 + 메시지 목록 + 읽음 처리) GET /api/chatrooms/{id} */
     @GetMapping("/{id}")
     fun enterChatRoom(
             @PathVariable id: Long,
-            session: HttpSession
+            @AuthenticationPrincipal principal: JwtUserPrincipal
     ): ResponseEntity<ApiResponse<ChatRoomDetailResponse>> {
-        val userId = authService.getUserIdFromSession(session)
-        val adminId = authService.getAdminIdFromSession(session)
-
-        if (userId == null && adminId == null) {
-            return ResponseEntity.status(401).body(ApiResponse.error("로그인이 필요합니다"))
-        }
+        val userId = if (principal.isUser()) principal.userId else null
+        val adminId = if (principal.isAdmin()) principal.userId else null
 
         // User인 경우 본인 채팅방만 접근 가능
         if (userId != null && !chatRoomService.canUserAccessChatRoom(userId, id)) {
@@ -47,14 +40,9 @@ class ChatRoomController(
             @PathVariable id: Long,
             @RequestParam(defaultValue = "0") page: Int,
             @RequestParam(defaultValue = "20") size: Int,
-            session: HttpSession
+            @AuthenticationPrincipal principal: JwtUserPrincipal
     ): ResponseEntity<ApiResponse<MessageListResponse>> {
-        val userId = authService.getUserIdFromSession(session)
-        val adminId = authService.getAdminIdFromSession(session)
-
-        if (userId == null && adminId == null) {
-            return ResponseEntity.status(401).body(ApiResponse.error("로그인이 필요합니다"))
-        }
+        val userId = if (principal.isUser()) principal.userId else null
 
         // User인 경우 본인 채팅방만 접근 가능
         if (userId != null && !chatRoomService.canUserAccessChatRoom(userId, id)) {

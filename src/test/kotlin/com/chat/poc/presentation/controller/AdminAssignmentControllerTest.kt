@@ -1,43 +1,43 @@
 package com.chat.poc.presentation.controller
 
-import com.chat.poc.application.service.AuthService
 import com.chat.poc.application.service.ChatRoomService
+import com.chat.poc.infrastructure.jwt.JwtTokenProvider
 import com.chat.poc.presentation.dto.ChatRoomListResponse
 import org.junit.jupiter.api.Test
 import org.mockito.BDDMockito.given
 import org.mockito.Mockito.verify
 import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc
+import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.test.mock.mockito.MockBean
-import org.springframework.mock.web.MockHttpSession
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 
-@WebMvcTest(AdminAssignmentController::class)
+@SpringBootTest
+@AutoConfigureMockMvc
 class AdminAssignmentControllerTest {
 
     @Autowired lateinit var mockMvc: MockMvc
 
-    @MockBean lateinit var chatRoomService: ChatRoomService
+    @Autowired lateinit var jwtTokenProvider: JwtTokenProvider
 
-    // Auth Check relies on session, no need to mock AuthService bean if only session attribute is
-    // checked in controller.
-    // However, if Controller uses AuthService constant, that's static/companion.
+    @MockBean lateinit var chatRoomService: ChatRoomService
 
     @Test
     fun `getUnassignedChatRooms should return 200`() {
         // Given
-        val session = MockHttpSession()
-        session.setAttribute(AuthService.SESSION_USER_ID, 1L)
-        session.setAttribute(AuthService.SESSION_USER_TYPE, AuthService.USER_TYPE_ADMIN)
+        val token = jwtTokenProvider.createToken(1L, "ADMIN")
 
         given(chatRoomService.getUnassignedChatRooms())
                 .willReturn(ChatRoomListResponse(emptyList()))
 
         // When & Then
-        mockMvc.perform(get("/api/admins/chatrooms/unassigned").session(session))
+        mockMvc.perform(
+                        get("/api/admins/chatrooms/unassigned")
+                                .header("Authorization", "Bearer $token")
+                )
                 .andExpect(status().isOk)
 
         verify(chatRoomService).getUnassignedChatRooms()
@@ -46,14 +46,21 @@ class AdminAssignmentControllerTest {
     @Test
     fun `assignChatRoom should return 200`() {
         // Given
-        val session = MockHttpSession()
-        session.setAttribute(AuthService.SESSION_USER_ID, 1L)
-        session.setAttribute(AuthService.SESSION_USER_TYPE, AuthService.USER_TYPE_ADMIN)
+        val token = jwtTokenProvider.createToken(1L, "ADMIN")
 
         // When & Then
-        mockMvc.perform(post("/api/admins/chatrooms/1/assign").session(session))
+        mockMvc.perform(
+                        post("/api/admins/chatrooms/1/assign")
+                                .header("Authorization", "Bearer $token")
+                )
                 .andExpect(status().isOk)
 
         verify(chatRoomService).assignChatRoom(1L, 1L)
+    }
+
+    @Test
+    fun `request without token should return 403`() {
+        // When & Then
+        mockMvc.perform(get("/api/admins/chatrooms/unassigned")).andExpect(status().isForbidden)
     }
 }

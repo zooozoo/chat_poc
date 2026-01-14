@@ -14,7 +14,8 @@ data class LoginRequest(
 data class LoginResponse(
         val id: Long,
         val email: String,
-        val userType: String // "USER" or "ADMIN"
+        val userType: String, // "USER" or "ADMIN"
+        val accessToken: String
 )
 
 /** User 정보 응답 DTO */
@@ -25,9 +26,9 @@ data class AdminResponse(val id: Long, val email: String, val name: String, val 
 
 /** 공통 API 응답 DTO */
 data class ApiResponse<T>(val success: Boolean, val data: T? = null, val message: String? = null) {
-    companion object {
-        fun <T> success(data: T): ApiResponse<T> = ApiResponse(success = true, data = data)
-        fun <T> error(message: String): ApiResponse<T> =
-                ApiResponse(success = false, message = message)
-    }
+        companion object {
+                fun <T> success(data: T): ApiResponse<T> = ApiResponse(success = true, data = data)
+                fun <T> error(message: String): ApiResponse<T> =
+                        ApiResponse(success = false, message = message)
+        }
 }

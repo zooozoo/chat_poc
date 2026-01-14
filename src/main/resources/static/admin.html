@@ -178,17 +178,44 @@
         let currentAdminId = null;
         let activeTab = 'all'; // 'all', 'unassigned', or 'mine'
 
+        // JWT 토큰 헬퍼 함수
+        function getAccessToken() {
+            return localStorage.getItem('accessToken');
+        }
+
+        function getAuthHeaders() {
+            const token = getAccessToken();
+            return token ? { 'Authorization': 'Bearer ' + token } : {};
+        }
+
+        async function fetchWithAuth(url, options = {}) {
+            options.headers = { ...options.headers, ...getAuthHeaders() };
+            const response = await fetch(url, options);
+            if (response.status === 401 || response.status === 403) {
+                logout();
+                return null;
+            }
+            return response;
+        }
+
         async function init() {
+            // 토큰 확인
+            if (!getAccessToken()) {
+                window.location.href = '/index.html';
+                return;
+            }
+
             try {
                 // 1. 내 정보 조회 (로그인 체크)
-                const adminRes = await fetch('/api/admins/me');
-                if (adminRes.status === 401) {
-                    window.location.href = '/index.html';
-                    return;
-                }
+                const adminRes = await fetchWithAuth('/api/admins/me');
+                if (!adminRes) return;
+
                 const adminData = await adminRes.json();
                 if (adminData.success) {
                     currentAdminId = adminData.data.id;
+                } else {
+                    window.location.href = '/index.html';
+                    return;
                 }
 
                 // 2. WebSocket 연결
@@ -208,24 +235,30 @@
         async function updateInitialTabCounts() {
             try {
                 // 미배정 카운트
-                const resUnassigned = await fetch('/api/admins/chatrooms/unassigned');
-                const dataUnassigned = await resUnassigned.json();
-                if (dataUnassigned.success) {
-                    updateTabCount('unassigned', dataUnassigned.data.chatRooms.length);
+                const resUnassigned = await fetchWithAuth('/api/admins/chatrooms/unassigned');
+                if (resUnassigned) {
+                    const dataUnassigned = await resUnassigned.json();
+                    if (dataUnassigned.success) {
+                        updateTabCount('unassigned', dataUnassigned.data.chatRooms.length);
+                    }
                 }
 
                 // 내 상담 카운트
-                const resMine = await fetch('/api/admins/chatrooms/mine');
-                const dataMine = await resMine.json();
-                if (dataMine.success) {
-                    updateTabCount('mine', dataMine.data.chatRooms.length);
+                const resMine = await fetchWithAuth('/api/admins/chatrooms/mine');
+                if (resMine) {
+                    const dataMine = await resMine.json();
+                    if (dataMine.success) {
+                        updateTabCount('mine', dataMine.data.chatRooms.length);
+                    }
                 }
 
                 // 전체 카운트
-                const resAll = await fetch('/api/admins/chatrooms');
-                const dataAll = await resAll.json();
-                if (dataAll.success) {
-                    updateTabCount('all', dataAll.data.chatRooms.length);
+                const resAll = await fetchWithAuth('/api/admins/chatrooms');
+                if (resAll) {
+                    const dataAll = await resAll.json();
+                    if (dataAll.success) {
+                        updateTabCount('all', dataAll.data.chatRooms.length);
+                    }
                 }
             } catch (e) {
                 console.error('Failed to update tab counts', e);
@@ -255,7 +288,9 @@
             else if (activeTab === 'mine') endpoint = '/api/admins/chatrooms/mine';
             else endpoint = '/api/admins/chatrooms';
 
-            const res = await fetch(endpoint);
+            const res = await fetchWithAuth(endpoint);
+            if (!res) return;
+
             const data = await res.json();
 
             if (data.success) {
@@ -312,15 +347,17 @@
             stompClient = Stomp.over(socket);
             stompClient.debug = null;
 
-            stompClient.connect({}, () => {
+            // STOMP CONNECT 시 Authorization 헤더 전달
+            const connectHeaders = {
+                'Authorization': 'Bearer ' + getAccessToken()
+            };
+
+            stompClient.connect(connectHeaders, () => {
                 console.log('Connected');
 
                 // 채팅방 목록 실시간 업데이트 구독 (Admin 전용 채널 - 기존)
                 stompClient.subscribe('/topic/admin/chatrooms', (message) => {
                     const noti = JSON.parse(message.body);
-                    // 미배정 탭이거나, 내 담당 채팅방이면 업데이트
-                    // (단순화를 위해 현재 탭 새로고침 혹은 로직 수행)
-                    // 여기서는 만약 리스트에 있는 방이면 업데이트, 아니면 (새 메시지면) 로드
                     updateChatRoomPreview(noti);
                 });
 
@@ -340,7 +377,6 @@
         }
 
         function handleReadNotificationForList(noti) {
-            // noti.readByType == 'ADMIN' 이면, Admin이 읽었으므로 뱃지를 0으로 만듦
             if (noti.readByType === 'ADMIN') {
                 const badge = document.getElementById(`badge-${noti.chatRoomId}`);
                 if (badge) {
@@ -351,12 +387,10 @@
         }
 
         function handleAssignmentNotification(noti) {
-            // 내가 배정받은 경우
             if (noti.assignedAdminId === currentAdminId) {
                 if (activeTab === 'mine') {
-                    loadChatRooms(); // 목록 리로드
+                    loadChatRooms();
                 } else {
-                    // 미배정 탭에 있었다면 해당 방 제거
                     const el = document.getElementById(`room-${noti.chatRoomId}`);
                     if (el) {
                         el.remove();
@@ -364,45 +398,37 @@
                     }
                 }
             } else {
-                // 다른 사람이 배정받은 경우 -> 미배정 탭에서 제거
                 if (activeTab === 'unassigned') {
                     const el = document.getElementById(`room-${noti.chatRoomId}`);
                     if (el) {
                         el.remove();
                         updateTabCount(activeTab, document.querySelectorAll('.chatroom-item').length);
                     } else {
-                        // 혹시 데이터 불일치 등으로 리스트에 없지만 카운트 갱신 필요할 수 있으나,
-                        // 여기서는 리스트 기반으로 카운트 하므로 패스
-                        loadChatRooms(); // 안전하게 리로드
+                        loadChatRooms();
                     }
                 }
             }
 
-            // 전체 탭인 경우 -> 리로드 (담당자 정보 갱신 등)
             if (activeTab === 'all') {
                 loadChatRooms();
             }
         }
 
         function updateChatRoomPreview(noti) {
-            // 현재 리스트에 있는 방인지 확인
             const roomEl = document.getElementById(`room-${noti.chatRoomId}`);
 
-            // 탭에 따라 처리 로직 분기
             const belongsToUnassigned = !noti.assignedAdminId;
             const belongsToMe = noti.assignedAdminId === currentAdminId;
 
-            let tabToUpdate = null;
             if (activeTab === 'unassigned') {
                 if (belongsToUnassigned) {
                     if (!roomEl) {
-                        loadChatRooms(); // 리로드 시 카운트도 갱신됨
+                        loadChatRooms();
                         return;
                     }
                 } else {
                     if (roomEl) {
                         roomEl.remove();
-                        // 현재 탭 카운트 감소
                         updateTabCount(activeTab, document.querySelectorAll('.chatroom-item').length);
                     }
                     return;
@@ -421,20 +447,16 @@
                     return;
                 }
             } else if (activeTab === 'all') {
-                // 전체 탭은 모든 방을 보여주므로 항상 업데이트/추가
                 if (!roomEl) {
                     loadChatRooms();
                     return;
                 }
             }
 
-            // 여기서부터는 리스트에 엘리먼트가 존재하는 경우
             if (!roomEl) return;
 
-            // 프리뷰 업데이트
             document.getElementById(`preview-${noti.chatRoomId}`).textContent = noti.lastMessageContent;
 
-            // 현재 보고있는 방이 아니면 뱃지 업데이트
             if (currentRoomId !== noti.chatRoomId) {
                 const badge = document.getElementById(`badge-${noti.chatRoomId}`);
                 if (badge) {
@@ -442,7 +464,6 @@
                     badge.classList.remove('hidden');
                 }
 
-                // 목록 맨 위로 올리기
                 const container = document.getElementById('chatList');
                 if (container.firstChild !== roomEl) {
                     container.insertBefore(roomEl, container.firstChild);
@@ -454,16 +475,13 @@
             currentRoomId = roomId;
             document.getElementById('currentUserName').textContent = userEmail;
 
-            // UI 전환
             document.getElementById('chatPlaceholder').style.display = 'none';
             document.getElementById('chatHeader').style.display = 'flex';
             document.getElementById('chatArea').style.display = 'flex';
 
-            // 배정 버튼 처리
             const assignBtn = document.getElementById('assignBtn');
             if (activeTab === 'unassigned' && !assignedAdminEmail) {
                 assignBtn.style.display = 'block';
-                // 입력창 비활성화?
                 document.getElementById('messageInput').disabled = true;
                 document.getElementById('messageInput').placeholder = "상담 시작하기를 눌러주세요";
             } else {
@@ -472,41 +490,31 @@
                 document.getElementById('messageInput').placeholder = "메시지 입력...";
             }
 
-            // 뱃지 제거
             const badge = document.getElementById(`badge-${roomId}`);
             if (badge) badge.classList.add('hidden');
 
-            // 이전 구독 해제
             if (currentSubscription) currentSubscription.unsubscribe();
             if (readSubscription) readSubscription.unsubscribe();
 
-            // API로 메시지 로드 (입장 처리 -> 읽음 처리 됨)
-            const res = await fetch(`/api/chatrooms/${roomId}?isAdmin=true`); // isAdmin 파라미터 필요할수도? enterChatRoom controller 확인 필요. 
-            // 현재 enterChatRoom은 /api/chatrooms/{id} 로 매핑되어있고, 세션에서 userType 체크함.
-            // param 필요 없음.
+            const dataRes = await fetchWithAuth(`/api/chatrooms/${roomId}`);
+            if (!dataRes) return;
 
-            const dataRes = await fetch(`/api/chatrooms/${roomId}`);
             const data = await dataRes.json();
 
             if (data.success) {
                 renderMessages(data.data.messages);
                 scrollToBottom();
 
-                // 새 방 구독
                 currentSubscription = stompClient.subscribe(`/topic/chat/${roomId}`, (message) => {
                     const msg = JSON.parse(message.body);
                     displayMessage(msg);
                     scrollToBottom();
 
-                    // 메시지 수신 시 읽음 처리 (내가 보는 방에 새 메시지가 왔으므로)
-                    // 단, 내 메시지는 제외할 수도 있지만, 서버에서 처리하므로 그냥 보냄
                     stompClient.send(`/app/chat/${roomId}/read`, {}, {});
                 });
 
-                // 입장 시 읽음 처리 전송
                 stompClient.send(`/app/chat/${roomId}/read`, {}, {});
 
-                // 읽음 알림 구독
                 readSubscription = stompClient.subscribe(`/topic/chat/${roomId}/read`, (message) => {
                     markAllAsRead();
                 });
@@ -517,14 +525,14 @@
             if (!currentRoomId) return;
             if (!confirm("이 상담을 시작하시겠습니까?")) return;
 
-            const res = await fetch(`/api/admins/chatrooms/${currentRoomId}/assign`, { method: 'POST' });
+            const res = await fetchWithAuth(`/api/admins/chatrooms/${currentRoomId}/assign`, { method: 'POST' });
+            if (!res) return;
+
             const data = await res.json();
 
             if (data.success) {
                 alert("상담이 배정되었습니다.");
-                // 내 상담 탭으로 이동
                 switchTab('mine');
-                // 방금 그 방 선택 (약간 복잡할 수 있으니 일단 탭 이동만)
             } else {
                 alert("배정 실패: " + (data.error?.message || "알 수 없는 오류"));
             }
@@ -539,11 +547,6 @@
         function displayMessage(msg) {
             const container = document.getElementById('messages');
             const div = document.createElement('div');
-
-            // ADMIN이 보낸 메시지 = 나(Admin)에게는 'user' 클래스 (오른쪽 - 색상은 CSS로 조정)
-            // USER가 보낸 메시지 = 나(Admin)에게는 'admin' 클래스 (왼쪽)
-            // 주의: style.css에서 .message.user를 오른쪽(내꺼), .message.admin을 왼쪽(상대)으로 정의했음.
-            // 여기서는 `isMe`가 참이면 `.message.user` 클래스를 줘서 오른쪽에 배치해야 함.
 
             const isMe = msg.senderType === 'ADMIN';
 
@@ -599,8 +602,8 @@
         }
 
         function logout() {
-            fetch('/api/admins/logout', { method: 'POST' })
-                .then(() => window.location.href = '/index.html');
+            localStorage.removeItem('accessToken');
+            window.location.href = '/index.html';
         }
 
         // Enter 키

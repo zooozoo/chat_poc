@@ -7,11 +7,61 @@ WebSocket 연결, Redis Pub/Sub 메시징, 읽음 처리 로직 등 백엔드 �
 
 ---
 
-## 2. 인증 및 세션 (Authentication Flow)
-단순화를 위해 Spring Session과 HttpSession을 사용하며, 클라이언트(Browser)는 기본 쿠키(`JSESSIONID`) 기반으로 인증을 유지합니다.
+## 2. 인증 및 JWT (Authentication Flow)
+JWT(JSON Web Token) 기반의 Stateless 인증 방식을 사용하며, 클라이언트는 `localStorage`에 저장된 `accessToken`을 HTTP `Authorization` 헤더를 통해 전달합니다.
 
-### 2.1 로그인 및 세션 생성
-User가 이메일 입력 시 DB에 없으면 자동 생성 후 세션을 발급합니다.
+### 2.0 JWT 토큰 구조 및 설정
+
+Chat POC는 **HMAC-SHA256** 알고리즘으로 서명된 JWT 토큰을 사용합니다.
+
+#### 토큰 구성
+
+**Claims (Payload)**:
+```json
+{
+  "sub": "5",              // userId (String)
+  "userId": 5,             // userId (Long)
+  "userType": "ADMIN",     // "USER" or "ADMIN"
+  "iat": 1705234567,       // Issued At (Unix timestamp)
+  "exp": 1705320967        // Expiration (Unix timestamp)
+}
+```
+
+**토큰 설정** (application.yml):
+```yaml
+jwt:
+  secret: chat-poc-jwt-secret-key-for-signing-minimum-32-characters-long
+  expiration: 86400000  # 24시간 (밀리초)
+```
+
+**주요 특징**:
+- **만료 시간**: 24시간 (86400000ms)
+- **서명 알고리즘**: HMAC-SHA256
+- **필수 클레임**: userId (Long), userType (String: "USER" or "ADMIN")
+- **저장 위치**: 클라이언트 localStorage (`accessToken` 키)
+- **전달 방식**: HTTP `Authorization: Bearer {token}` 헤더
+
+**Backend 구현** (JwtTokenProvider.kt:30-43):
+```kotlin
+fun createToken(userId: Long, userType: String): String {
+    val now = Date()
+    val expiryDate = Date(now.time + expiration)
+
+    return Jwts.builder()
+            .subject(userId.toString())
+            .claim("userId", userId)
+            .claim("userType", userType)
+            .issuedAt(now)
+            .expiration(expiryDate)
+            .signWith(key)  // HMAC-SHA256
+            .compact()
+}
+```
+
+---
+
+### 2.1 로그인 및 토큰 생성
+User가 이메일 입력 시 DB에 없으면 자동 생성 후 JWT 토큰을 발급합니다.
 
 ```mermaid
 sequenceDiagram
@@ -19,17 +69,20 @@ sequenceDiagram
     participant API as AuthController
     participant S as AuthService
     participant DB as MySQL
-    participant Sess as HttpSession
+    participant JWT as JwtTokenProvider
 
     C->>API: POST /api/{users|admins}/login (email)
-    API->>S: login(email)
+    API->>S: login{User|Admin}(email)
     S->>DB: findByEmail(email)
-    alt User Not Found
-        S->>DB: save(newUser)
+    alt User/Admin Not Found
+        S->>DB: save(newUser/Admin)
     end
-    S->>Sess: setAttribute("userId", id)
-    S->>Sess: setAttribute("userType", TYPE)
-    S-->>C: Cookie: JSESSIONID
+    S->>JWT: createToken(userId, userType)
+    JWT->>JWT: Generate JWT with claims
+    JWT-->>S: accessToken
+    S-->>API: LoginResponse (with accessToken)
+    API-->>C: { id, email, userType, accessToken }
+    C->>C: localStorage.setItem('accessToken', token)
 ```
 
 #### ✉️ HTTP Request Spec
@@ -51,37 +104,315 @@ sequenceDiagram
   "data": {
     "id": 5,
     "email": "admin1@email.com",
-    "userType": "ADMIN"
+    "userType": "ADMIN",
+    "accessToken": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiI1IiwidXNlcklkIjo1LCJ1c2VyVHlwZSI6IkFETUlOIiwiaWF0IjoxNzA1MjM0NTY3LCJleHAiOjE3MDUzMjA5Njd9.abcd1234..."
   }
 }
 ```
 - **userType**: "USER" 또는 "ADMIN"
+- **accessToken**: JWT 토큰 (24시간 유효)
 - 이메일이 DB에 없으면 자동으로 생성 후 로그인 처리
-- 세션에 `userId`, `userType`이 저장되고, `JSESSIONID` 쿠키 발급
+- 클라이언트는 accessToken을 localStorage에 저장
+- 이후 모든 요청에 `Authorization: Bearer {token}` 헤더로 전달
+
+**Frontend 처리** (index.html:83-88):
+```javascript
+// 로그인 성공 시
+localStorage.setItem('accessToken', data.data.accessToken);
+if (userType === 'admin') {
+    window.location.href = '/admin.html';
+} else {
+    window.location.href = '/user.html';
+}
+```
 
 ---
 
-## 3. 웹소켓 연결 및 핸드셰이크 (WebSocket Handshake)
-HTTP 세션에 저장된 사용자 정보를 WebSocket 세션으로 이관하는 과정이 필수적입니다.
-`WebSocketHandshakeInterceptor`가 이 역할을 수행합니다.
+### 2.2 REST API 인증 흐름 (Token Validation)
+
+로그인 이후 모든 REST API 요청은 JWT 토큰을 통해 인증됩니다.
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant Filter as JwtAuthenticationFilter
+    participant JWT as JwtTokenProvider
+    participant API as Controller
+    participant Principal as JwtUserPrincipal
+
+    C->>Filter: GET /api/users/me<br/>Authorization: Bearer {token}
+    Filter->>Filter: resolveToken(request)
+    Filter->>JWT: validateToken(token)
+
+    alt Token Valid
+        JWT-->>Filter: true
+        Filter->>JWT: getUserId(token)
+        Filter->>JWT: getUserType(token)
+        JWT-->>Filter: userId: 5, userType: "ADMIN"
+        Filter->>Principal: new JwtUserPrincipal(userId, userType)
+        Filter->>Filter: Set SecurityContext
+        Filter->>API: Continue request
+        API->>API: @AuthenticationPrincipal principal
+        API-->>C: 200 OK + Response
+    else Token Invalid/Expired
+        JWT-->>Filter: false
+        Filter->>API: Continue (No Authentication)
+        API-->>C: 401 Unauthorized
+    end
+```
+
+#### ✉️ HTTP Request Spec (인증이 필요한 모든 엔드포인트)
+
+**Request Header** (필수):
+```
+Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiI1IiwidXNlcklkIjo1...
+```
+
+**Backend 처리 흐름** (JwtAuthenticationFilter.kt:26-40):
+1. `Authorization` 헤더에서 `Bearer ` prefix를 제거하여 토큰 추출
+2. `JwtTokenProvider.validateToken()`으로 서명 및 만료 시간 검증
+3. 토큰에서 `userId`, `userType` 클레임 추출
+4. `JwtUserPrincipal` 객체 생성 후 `SecurityContext`에 저장
+5. Controller에서 `@AuthenticationPrincipal`로 주입받아 사용
+
+**Controller 사용 예시** (UserController.kt:36-48):
+```kotlin
+@GetMapping("/me")
+fun getMe(@AuthenticationPrincipal principal: JwtUserPrincipal): ResponseEntity<ApiResponse<UserResponse>> {
+    if (!principal.isUser()) {
+        return ResponseEntity.status(403).body(ApiResponse.error("User 권한이 필요합니다"))
+    }
+    val user = authService.getCurrentUser(principal.userId)
+            ?: return ResponseEntity.status(404).body(ApiResponse.error("사용자를 찾을 수 없습니다"))
+    return ResponseEntity.ok(ApiResponse.success(user))
+}
+```
+
+**Frontend 처리** (user.html:49-68, admin.html:181-200):
+```javascript
+// localStorage에서 토큰 가져오기
+function getAccessToken() {
+    return localStorage.getItem('accessToken');
+}
+
+// Authorization 헤더 생성
+function getAuthHeaders() {
+    const token = getAccessToken();
+    return token ? { 'Authorization': 'Bearer ' + token } : {};
+}
+
+// 인증이 필요한 API 호출
+async function fetchWithAuth(url, options = {}) {
+    options.headers = { ...options.headers, ...getAuthHeaders() };
+    const response = await fetch(url, options);
+
+    // 401/403 응답 시 자동 로그아웃
+    if (response.status === 401 || response.status === 403) {
+        alert('인증이 만료되었습니다. 다시 로그인해주세요.');
+        logout();
+        return null;
+    }
+
+    return response;
+}
+
+// 사용 예시
+const userRes = await fetchWithAuth('/api/users/me');
+```
+
+---
+
+### 2.3 보안 설정 (SecurityConfig)
+
+**Stateless Session 설정** (SecurityConfig.kt:18-39):
+```kotlin
+http
+    .csrf { it.disable() }
+    .sessionManagement { it.sessionCreationPolicy(SessionCreationPolicy.STATELESS) }
+    .authorizeHttpRequests { auth ->
+        auth
+            // 로그인 API는 인증 불필요
+            .requestMatchers("/api/users/login", "/api/admins/login").permitAll()
+            // WebSocket 엔드포인트 (STOMP CONNECT에서 JWT 검증)
+            .requestMatchers("/ws/**").permitAll()
+            // 정적 리소스
+            .requestMatchers("/*.html", "/css/**", "/js/**", "/index.html", "/").permitAll()
+            // 그 외 모든 요청은 인증 필요
+            .anyRequest().authenticated()
+    }
+    .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter::class.java)
+```
+
+**주요 설정**:
+- **SessionCreationPolicy.STATELESS**: 서버에서 세션을 생성하지 않음
+- **CSRF 비활성화**: Stateless 환경에서는 불필요
+- **JwtAuthenticationFilter**: 모든 요청에 대해 JWT 검증 수행 (public endpoints 제외)
+
+**Public Endpoints (인증 불필요)**:
+- `/api/users/login`, `/api/admins/login` - 로그인 API
+- `/ws/**` - WebSocket 연결 (STOMP CONNECT에서 별도 검증)
+- `/*.html`, `/css/**`, `/js/**`, `/` - 정적 리소스
+
+**Protected Endpoints (인증 필요)**:
+- `/api/users/**` (로그인 제외)
+- `/api/admins/**` (로그인 제외)
+- `/api/chatrooms/**`
+
+---
+
+### 2.4 인증 오류 처리 (Error Handling)
+
+JWT 인증 과정에서 발생할 수 있는 오류와 처리 방법입니다.
+
+#### HTTP API 오류 시나리오
+
+| 시나리오 | HTTP 상태 | 원인 | 클라이언트 동작 |
+|----------|----------|------|----------------|
+| **토큰 없음** | 401 Unauthorized | Authorization 헤더 누락 | 로그인 페이지로 리다이렉트 |
+| **토큰 만료** | 401 Unauthorized | exp 시간 초과 (24시간 경과) | 로그인 페이지로 리다이렉트 |
+| **토큰 서명 불일치** | 401 Unauthorized | 토큰 변조 또는 잘못된 secret | 로그인 페이지로 리다이렉트 |
+| **토큰 형식 오류** | 401 Unauthorized | Bearer prefix 누락 또는 잘못된 포맷 | 로그인 페이지로 리다이렉트 |
+| **권한 부족** | 403 Forbidden | User/Admin 불일치 (예: User가 Admin API 호출) | 오류 메시지 표시 |
+
+**Backend 처리** (JwtAuthenticationFilter.kt:26-40):
+```kotlin
+override fun doFilterInternal(request: HttpServletRequest, response: HttpServletResponse, filterChain: FilterChain) {
+    val token = resolveToken(request)
+
+    if (token != null && jwtTokenProvider.validateToken(token)) {
+        val userId = jwtTokenProvider.getUserId(token)
+        val userType = jwtTokenProvider.getUserType(token)
+
+        val principal = JwtUserPrincipal(userId, userType)
+        val authorities = listOf(SimpleGrantedAuthority("ROLE_$userType"))
+
+        val authentication = UsernamePasswordAuthenticationToken(principal, null, authorities)
+        SecurityContextHolder.getContext().authentication = authentication
+    }
+
+    filterChain.doFilter(request, response)
+    // 토큰이 없거나 invalid하면 SecurityContext에 인증 정보가 없는 상태로 진행
+    // Controller에서 @AuthenticationPrincipal이 null이면 자동으로 401 반환
+}
+```
+
+**Frontend 오류 처리** (user.html:59-68, admin.html:191-200):
+```javascript
+async function fetchWithAuth(url, options = {}) {
+    options.headers = { ...options.headers, ...getAuthHeaders() };
+    const response = await fetch(url, options);
+
+    if (response.status === 401 || response.status === 403) {
+        alert('인증이 만료되었습니다. 다시 로그인해주세요.');
+        localStorage.removeItem('accessToken');
+        window.location.href = '/index.html';
+        return null;
+    }
+
+    return response;
+}
+```
+
+---
+
+### 2.5 JWT 전체 흐름 (Complete Lifecycle)
+
+사용자 로그인부터 WebSocket 통신까지 JWT가 어떻게 사용되는지 전체 흐름입니다.
+
+```mermaid
+sequenceDiagram
+    participant User as User
+    participant Login as Login Page
+    participant API as Backend API
+    participant JWT as JwtTokenProvider
+    participant Storage as localStorage
+    participant Page as User/Admin Page
+    participant WS as WebSocket
+
+    rect rgb(240, 248, 255)
+        Note over User,WS: 1. 로그인 단계
+        User->>Login: 이메일 입력
+        Login->>API: POST /api/users/login
+        API->>JWT: createToken(userId, userType)
+        JWT-->>API: accessToken
+        API-->>Login: LoginResponse (with token)
+        Login->>Storage: setItem('accessToken', token)
+        Login->>Page: Redirect to user.html
+    end
+
+    rect rgb(255, 248, 240)
+        Note over User,WS: 2. REST API 호출
+        Page->>Storage: getItem('accessToken')
+        Storage-->>Page: token
+        Page->>API: GET /api/users/chatroom<br/>Authorization: Bearer {token}
+        API->>API: JwtAuthenticationFilter 검증
+        API-->>Page: ChatRoomResponse
+    end
+
+    rect rgb(240, 255, 248)
+        Note over User,WS: 3. WebSocket 연결
+        Page->>Storage: getItem('accessToken')
+        Storage-->>Page: token
+        Page->>WS: STOMP CONNECT<br/>Authorization: Bearer {token}
+        WS->>WS: JwtChannelInterceptor 검증
+        WS->>WS: sessionAttributes.put(userId, userType)
+        WS-->>Page: CONNECTED
+    end
+
+    rect rgb(255, 240, 245)
+        Note over User,WS: 4. 메시지 전송
+        Page->>WS: SEND /app/chat/1/send
+        WS->>WS: Extract userId from sessionAttributes
+        WS->>API: messageService.sendMessage()
+        API-->>WS: Success
+        WS-->>Page: MESSAGE /topic/chat/1
+    end
+
+    rect rgb(255, 245, 240)
+        Note over User,WS: 5. 토큰 만료 시
+        Page->>API: GET /api/users/me<br/>Authorization: Bearer {expired_token}
+        API-->>Page: 401 Unauthorized
+        Page->>Storage: removeItem('accessToken')
+        Page->>Login: Redirect to index.html
+    end
+```
+
+---
+
+## 3. 웹소켓 연결 및 JWT 인증 (WebSocket Connection & JWT Authentication)
+STOMP CONNECT 프레임의 `Authorization` 헤더를 통해 JWT 토큰을 전달하고, `JwtChannelInterceptor`가 토큰을 검증하여 WebSocket 세션에 사용자 정보를 저장합니다.
 
 ```mermaid
 sequenceDiagram
     participant C as Client (SockJS)
     participant WS as WebSocketHandler
-    participant I as HandshakeInterceptor
-    participant Sess as HttpSession
+    participant Interceptor as JwtChannelInterceptor
+    participant JWT as JwtTokenProvider
 
-    C->>WS: GET /ws (Upgrade Request)
-    WS->>I: beforeHandshake()
-    I->>Sess: getAttribute("userId", "userType")
-    Sess-->>I: {userId: 1, userType: "USER"}
-    I->>I: attributes.put("userId", 1)
+    Note over C,JWT: HTTP Upgrade (WebSocket Handshake)
+    C->>WS: GET /ws (HTTP Upgrade Request)
     WS-->>C: 101 Switching Protocols
     Note right of C: WebSocket Connection Established
-    
-    C->>WS: STOMP CONNECT
-    WS-->>C: STOMP CONNECTED
+
+    Note over C,JWT: STOMP Authentication
+    C->>WS: STOMP CONNECT<br/>Authorization: Bearer {token}
+    WS->>Interceptor: preSend(message)
+    Interceptor->>Interceptor: Extract token from Authorization header
+    Interceptor->>JWT: validateToken(token)
+
+    alt Token Valid
+        JWT-->>Interceptor: true
+        Interceptor->>JWT: getUserId(token), getUserType(token)
+        JWT-->>Interceptor: userId: 5, userType: "ADMIN"
+        Interceptor->>Interceptor: sessionAttributes["userId"] = 5
+        Interceptor->>Interceptor: sessionAttributes["userType"] = "ADMIN"
+        WS-->>C: STOMP CONNECTED
+        Note right of C: Authenticated - Ready for messaging
+    else Token Invalid/Missing
+        Interceptor->>Interceptor: Log warning
+        WS-->>C: STOMP CONNECTED
+        Note right of C: Not Authenticated - Messages will be rejected
+    end
 ```
 
 #### ✉️ STOMP Frame: CONNECT
@@ -89,19 +420,158 @@ sequenceDiagram
 CONNECT
 accept-version:1.1,1.0
 heart-beat:10000,10000
+Authorization:Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiI1IiwidXNlcklkIjo1LCJ1c2VyVHlwZSI6IkFETUlOIiwiaWF0IjoxNzA1MjM0NTY3LCJleHAiOjE3MDUzMjA5Njd9.abcd1234...
 
 ^@
 ```
+
+**주요 변경사항**:
+- `Authorization` 헤더 추가 (STOMP native header)
+- `Bearer ` prefix 포함
+- JWT 토큰 전체 문자열 전달
 
 #### ✉️ STOMP Frame: CONNECTED
 ```text
 CONNECTED
 version:1.1
 heart-beat:0,0
-user-name:user1@email.com
 
 ^@
 ```
+
+**Note**: `user-name` 헤더는 제거됨 (JWT 방식에서는 사용하지 않음)
+
+---
+
+### Backend 구현
+
+**JwtChannelInterceptor** (JwtChannelInterceptor.kt:25-59):
+```kotlin
+@Component
+class JwtChannelInterceptor(private val jwtTokenProvider: JwtTokenProvider) : ChannelInterceptor {
+
+    companion object {
+        const val ATTR_USER_ID = "userId"
+        const val ATTR_USER_TYPE = "userType"
+    }
+
+    override fun preSend(message: Message<*>, channel: MessageChannel): Message<*>? {
+        val accessor = MessageHeaderAccessor.getAccessor(message, StompHeaderAccessor::class.java)
+                ?: return message
+
+        if (accessor.command == StompCommand.CONNECT) {
+            val authHeader = accessor.getFirstNativeHeader("Authorization")
+
+            if (authHeader != null && authHeader.startsWith("Bearer ")) {
+                val token = authHeader.substring("Bearer ".length)
+
+                if (jwtTokenProvider.validateToken(token)) {
+                    val userId = jwtTokenProvider.getUserId(token)
+                    val userType = jwtTokenProvider.getUserType(token)
+
+                    // sessionAttributes에 사용자 정보 저장 (ChatWebSocketController에서 사용)
+                    accessor.sessionAttributes = accessor.sessionAttributes ?: mutableMapOf()
+                    accessor.sessionAttributes!![ATTR_USER_ID] = userId
+                    accessor.sessionAttributes!![ATTR_USER_TYPE] = userType
+
+                    log.info("[WS ✓] STOMP CONNECT authenticated - userId: $userId, userType: $userType")
+                } else {
+                    log.warn("[WS ✗] Invalid JWT token in STOMP CONNECT")
+                }
+            } else {
+                log.warn("[WS ⚠] No Authorization header in STOMP CONNECT")
+            }
+        }
+
+        return message
+    }
+}
+```
+
+**WebSocketConfig 설정** (WebSocketConfig.kt:33-36):
+```kotlin
+override fun configureClientInboundChannel(registration: ChannelRegistration) {
+    // STOMP CONNECT 시 JWT 토큰 검증
+    registration.interceptors(jwtChannelInterceptor)
+}
+```
+
+**ChatWebSocketController 사용** (ChatWebSocketController.kt:38-51):
+```kotlin
+@MessageMapping("/chat/{roomId}/send")
+fun sendMessage(@DestinationVariable roomId: Long, @Payload request: ChatMessageRequest,
+                headerAccessor: SimpMessageHeaderAccessor): ChatMessageResponse? {
+    val sessionAttributes = headerAccessor.sessionAttributes ?: run {
+        log.warn("No session attributes found")
+        return null
+    }
+
+    val userId = sessionAttributes["userId"] as? Long
+    val userType = sessionAttributes["userType"] as? String
+
+    if (userId == null || userType == null) {
+        log.warn("User not authenticated")
+        return null
+    }
+
+    // 메시지 처리 로직...
+}
+```
+
+---
+
+### Frontend 구현
+
+**WebSocket 연결** (user.html:130-168, admin.html:345-377):
+```javascript
+// WebSocket 연결
+function connectWebSocket() {
+    const socket = new SockJS('/ws');
+    stompClient = Stomp.over(socket);
+    stompClient.debug = null; // 디버그 로그 끄기
+
+    // STOMP CONNECT 시 Authorization 헤더 전달
+    const connectHeaders = {
+        'Authorization': 'Bearer ' + getAccessToken()
+    };
+
+    stompClient.connect(connectHeaders, function(frame) {
+        console.log('WebSocket Connected:', frame);
+
+        // 구독 시작
+        stompClient.subscribe(`/topic/chat/${chatRoomId}`, (message) => {
+            const msg = JSON.parse(message.body);
+            displayMessage(msg);
+        });
+
+        // 메시지 전송 등...
+    }, function(error) {
+        console.error('STOMP error', error);
+    });
+}
+```
+
+---
+
+### 인증 흐름 요약
+
+1. Client가 localStorage에서 `accessToken` 조회
+2. STOMP CONNECT 프레임에 `Authorization: Bearer {token}` 헤더 추가
+3. Server의 `JwtChannelInterceptor.preSend()`에서 토큰 추출 및 검증
+4. 검증 성공 시 `sessionAttributes`에 `userId`, `userType` 저장
+5. `ChatWebSocketController`의 `@MessageMapping` 메서드에서 `SimpMessageHeaderAccessor.sessionAttributes`로 사용자 정보 접근
+
+---
+
+### WebSocket 인증 오류 시나리오
+
+| 시나리오 | 동작 | 결과 |
+|----------|------|------|
+| **CONNECT 시 토큰 없음** | 연결은 성공하지만 sessionAttributes 미설정 | 메시지 전송 시 null 반환 (인증 실패) |
+| **CONNECT 시 토큰 만료** | 연결은 성공하지만 sessionAttributes 미설정 | 메시지 전송 시 null 반환 (인증 실패) |
+| **메시지 전송 시 인증 없음** | ChatWebSocketController가 null 반환 | 메시지 전송 실패 (로그: "User not authenticated") |
+
+**Note**: 현재 POC 구현에서는 토큰이 invalid해도 연결 자체는 허용하고, 메시지 전송 시점에 권한을 체크합니다. Production 환경에서는 연결 단계에서 거부하도록 개선 권장
 
 ---
 
@@ -121,7 +591,7 @@ sequenceDiagram
 
     Sender->>Socket: SEND /app/chat/{roomId}/send
     Socket->>C: sendMessage(payload, headerAccessor)
-    C->>C: Extract userId from Session
+    C->>C: Extract userId from sessionAttributes (JWT)
     C->>S: sendMessage(roomId, userId, content)
     S->>DB: save(Message)
     S->>DB: update ChatRoom (lastMessage, unreadCount)
@@ -258,7 +728,7 @@ sequenceDiagram
 #### ✉️ HTTP Request Spec
 **GET** `/api/chatrooms/{id}`
 - **Path Parameter**: `id` (채팅방 ID)
-- **세션 인증 필요**: User 또는 Admin
+- **JWT 인증 필요**: Authorization 헤더 (Bearer token)
 - **권한**: User는 본인 채팅방만 접근 가능, Admin은 모든 채팅방 접근 가능
 - **동작**: 메시지 목록만 조회하며, 읽음 처리는 수행하지 않음
 
@@ -299,7 +769,7 @@ sequenceDiagram
     participant Redis as Redis Channel
 
     Client->>WS: SEND /app/chat/{roomId}/read
-    WS->>WS: Extract userId, userType from Session
+    WS->>WS: Extract userId, userType from sessionAttributes (JWT)
     WS->>S: markAsRead(roomId, userId, userType)
 
     rect rgb(240, 248, 255)
@@ -469,11 +939,13 @@ sequenceDiagram
 
 #### ✉️ HTTP Request Spec
 **GET** `/api/admins/chatrooms/unassigned`
-- **세션 인증 필요**: Admin
+- **JWT 인증 필요**: Authorization 헤더 (Bearer token)
+- **권한**: Admin 권한 필요
 - **응답**: `ChatRoomListResponse` (admin이 null인 채팅방 목록)
 
 **GET** `/api/admins/chatrooms/mine`
-- **세션 인증 필요**: Admin
+- **JWT 인증 필요**: Authorization 헤더 (Bearer token)
+- **권한**: Admin 권한 필요
 - **응답**: `ChatRoomListResponse` (현재 로그인한 Admin이 배정된 채팅방 목록)
 
 **Response**: `ChatRoomListResponse`
@@ -539,7 +1011,8 @@ sequenceDiagram
 #### ✉️ HTTP Request Spec
 **POST** `/api/admins/chatrooms/{id}/assign`
 - **Path Parameter**: `id` (채팅방 ID)
-- **세션 인증 필요**: Admin
+- **JWT 인증 필요**: Authorization 헤더 (Bearer token)
+- **권한**: Admin 권한 필요
 - **동작**: 현재 로그인한 Admin을 해당 채팅방의 담당자로 배정
 
 **Request Body**: 없음
@@ -601,7 +1074,7 @@ sequenceDiagram
     participant DB as MySQL
 
     Client->>API: GET /api/chatrooms/{id}/messages?page=0&size=20
-    API->>API: 세션 인증 확인
+    API->>API: JWT 인증 확인 (JwtAuthenticationFilter)
     API->>S: getMessages(id, page, size)
     S->>DB: findByChatRoomIdOrderByCreatedAtDesc(id, pageable)
     DB-->>S: Page<Message>
@@ -659,7 +1132,7 @@ Chat POC는 **STOMP over WebSocket** 프로토콜을 사용하여 실시간 양�
 - **URL**: `/ws`
 - **프로토콜**: STOMP 1.1/1.0
 - **Fallback**: SockJS (WebSocket 미지원 환경)
-- **인증**: HTTP 세션 기반 (WebSocketHandshakeInterceptor를 통해 WebSocket 세션으로 전달)
+- **인증**: JWT 기반 (JwtChannelInterceptor를 통해 STOMP CONNECT 시 검증 및 sessionAttributes에 저장)
 
 #### 메시지 브로커 구조
 
@@ -1113,3 +1586,62 @@ sequenceDiagram
 | **Admin 메시지 읽음** | Admin이 채팅방 입장 | `chat:read:{id}` | User 채팅방 (읽음 표시), Admin 목록 (모든 Admin, 뱃지 0) |
 | **채팅방 배정** | Admin이 배정 버튼 클릭 | `chat:admin:assignment` | Admin1 목록 ("내 상담" 추가), Admin2 목록 ("미배정" 제거) |
 | **실시간 대화** | User ↔ Admin 메시지 교환 | 위 모든 채널 조합 | 모든 화면 실시간 동기화 |
+
+---
+
+## 문서 변경 이력 (Document Change History)
+
+### 2026-01-14: Session 기반 인증 → JWT 기반 인증으로 전환
+
+#### 주요 변경사항
+
+**Section 2: "인증 및 세션" → "인증 및 JWT"**
+- JWT 토큰 구조 및 설정 추가 (2.0)
+  - Claims 구조 (userId, userType)
+  - 만료 시간 (24시간)
+  - HMAC-SHA256 서명
+- 로그인 및 토큰 생성 흐름 업데이트 (2.1)
+  - LoginResponse에 accessToken 추가
+  - localStorage 저장 방식
+- REST API 인증 흐름 추가 (2.2)
+  - JwtAuthenticationFilter 검증 과정
+  - Authorization: Bearer 헤더 사용
+  - @AuthenticationPrincipal JwtUserPrincipal 활용
+- 보안 설정 추가 (2.3)
+  - SessionCreationPolicy.STATELESS
+  - Public/Protected 엔드포인트 구분
+- 인증 오류 처리 추가 (2.4)
+  - 토큰 만료, 서명 불일치, 권한 부족 시나리오
+  - HTTP 401/403 응답 처리
+- JWT 전체 라이프사이클 다이어그램 추가 (2.5)
+
+**Section 3: "웹소켓 연결 및 핸드셰이크" → "웹소켓 연결 및 JWT 인증"**
+- WebSocketHandshakeInterceptor → JwtChannelInterceptor 교체
+- STOMP CONNECT 프레임에 Authorization 헤더 추가
+- sessionAttributes를 통한 사용자 정보 저장 방식
+- WebSocket 인증 오류 시나리오 추가
+
+**전체 문서 용어 업데이트**
+- "세션 인증 필요" → "JWT 인증 필요: Authorization 헤더 (Bearer token)"
+- "Extract userId from Session" → "Extract userId from sessionAttributes (JWT)"
+- "HTTP 세션 기반" → "JWT 기반"
+- JSESSIONID 쿠키 참조 제거
+- HttpSession 참조를 sessionAttributes (WebSocket) 또는 JwtAuthenticationFilter (REST API)로 변경
+
+#### 기술 스택 변경
+- 제거: Spring Session, Redis Session Storage
+- 추가: JJWT 라이브러리 (io.jsonwebtoken)
+- 추가: Spring Security with JWT Filter
+- 추가: JwtTokenProvider, JwtAuthenticationFilter, JwtChannelInterceptor, JwtUserPrincipal
+
+#### 인증 방식 비교
+
+| 항목 | 이전 (Session) | 현재 (JWT) |
+|------|---------------|-----------|
+| **저장소** | Redis (서버 측) | localStorage (클라이언트 측) |
+| **전달 방식** | JSESSIONID 쿠키 | Authorization: Bearer 헤더 |
+| **상태** | Stateful | Stateless |
+| **만료** | 서버에서 관리 | 토큰 자체에 포함 (24시간) |
+| **확장성** | 세션 동기화 필요 | 세션 불필요, 수평 확장 용이 |
+| **WebSocket 인증** | WebSocketHandshakeInterceptor | JwtChannelInterceptor |
+| **REST API 인증** | HttpSession | JwtAuthenticationFilter |

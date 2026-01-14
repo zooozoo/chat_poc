@@ -1,6 +1,5 @@
 package com.chat.poc.presentation.controller
 
-import com.chat.poc.application.service.AuthService
 import com.chat.poc.application.service.ChatRoomService
 import com.chat.poc.application.service.MessageService
 import com.chat.poc.presentation.dto.ChatMessageRequest
@@ -15,10 +14,16 @@ import org.springframework.stereotype.Controller
 @Controller
 class ChatWebSocketController(
         private val messageService: MessageService,
-        private val chatRoomService: ChatRoomService,
-        private val authService: AuthService
+        private val chatRoomService: ChatRoomService
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
+
+    companion object {
+        const val ATTR_USER_ID = "userId"
+        const val ATTR_USER_TYPE = "userType"
+        const val USER_TYPE_USER = "USER"
+        const val USER_TYPE_ADMIN = "ADMIN"
+    }
 
     /**
      * 메시지 전송 Client -> /app/chat/{roomId}/send Server -> /topic/chat/{roomId} (Redis Pub/Sub 통해)
@@ -37,8 +42,8 @@ class ChatWebSocketController(
                                 return null
                             }
 
-            val userId = sessionAttributes[AuthService.SESSION_USER_ID] as? Long
-            val userType = sessionAttributes[AuthService.SESSION_USER_TYPE] as? String
+            val userId = sessionAttributes[ATTR_USER_ID] as? Long
+            val userType = sessionAttributes[ATTR_USER_TYPE] as? String
 
             if (userId == null || userType == null) {
                 log.warn("User not authenticated")
@@ -48,7 +53,7 @@ class ChatWebSocketController(
             log.info("[MSG →] Received message from $userType($userId) to room $roomId")
 
             // 채팅방 접근 권한 확인
-            if (userType == AuthService.USER_TYPE_USER) {
+            if (userType == USER_TYPE_USER) {
                 if (!chatRoomService.canUserAccessChatRoom(userId, roomId)) {
                     log.warn("User $userId cannot access chatRoom $roomId")
                     return null
@@ -78,8 +83,8 @@ class ChatWebSocketController(
                                 return
                             }
 
-            val userId = sessionAttributes[AuthService.SESSION_USER_ID] as? Long
-            val userType = sessionAttributes[AuthService.SESSION_USER_TYPE] as? String
+            val userId = sessionAttributes[ATTR_USER_ID] as? Long
+            val userType = sessionAttributes[ATTR_USER_TYPE] as? String
 
             if (userId != null && userType != null) {
                 chatRoomService.markAsRead(roomId, userId, userType)
