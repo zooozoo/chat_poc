@@ -1,5 +1,6 @@
 package com.chat.poc.infrastructure.config
 
+import org.slf4j.LoggerFactory
 import org.springframework.context.annotation.Configuration
 import org.springframework.http.server.ServerHttpRequest
 import org.springframework.http.server.ServerHttpResponse
@@ -11,6 +12,8 @@ import org.springframework.web.socket.server.HandshakeInterceptor
 @Configuration
 class WebSocketHandshakeInterceptor : HandshakeInterceptor {
 
+    private val log = LoggerFactory.getLogger(javaClass)
+
     override fun beforeHandshake(
             request: ServerHttpRequest,
             response: ServerHttpResponse,
@@ -21,8 +24,13 @@ class WebSocketHandshakeInterceptor : HandshakeInterceptor {
             val session = request.servletRequest.session
 
             // HTTP 세션의 인증 정보를 WebSocket 세션으로 복사
-            session.getAttribute("userId")?.let { attributes["userId"] = it }
-            session.getAttribute("userType")?.let { attributes["userType"] = it }
+            val userId = session.getAttribute("userId")
+            val userType = session.getAttribute("userType")
+
+            userId?.let { attributes["userId"] = it }
+            userType?.let { attributes["userType"] = it }
+
+            log.info("[WS ↗] Handshake started - userId: $userId, userType: $userType")
         }
         return true
     }
@@ -33,6 +41,10 @@ class WebSocketHandshakeInterceptor : HandshakeInterceptor {
             wsHandler: WebSocketHandler,
             exception: Exception?
     ) {
-        // Nothing to do
+        if (exception != null) {
+            log.warn("[WS ✗] Handshake failed: ${exception.message}")
+        } else {
+            log.info("[WS ✓] Handshake completed")
+        }
     }
 }

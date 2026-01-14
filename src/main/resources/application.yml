@@ -39,6 +39,14 @@ server:
 
 logging:
   level:
+    # Hibernate - 핵심 SQL만 출력
     org.hibernate.SQL: DEBUG
-    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
-    com.chat: DEBUG
+    
+    # Application 로그 - 플로우 추적용
+    com.chat: INFO
+    
+    # 불필요한 프레임워크 로그 억제
+    org.springframework.web.socket: WARN
+    org.apache.tomcat.websocket: WARN
+    org.springframework.messaging: WARN
+

@@ -24,7 +24,7 @@ class RedisSubscriber(
             val channel = String(message.channel)
             var payload = String(message.body)
 
-            log.debug("Received message from channel: $channel")
+            log.info("[Redis ↓] Received from channel: $channel")
 
             // Redis에서 이중 인코딩된 경우 처리
             if (payload.startsWith("\"") && payload.endsWith("\"")) {
@@ -54,13 +54,15 @@ class RedisSubscriber(
         val chatRoomId = channel.removePrefix(RedisPublisher.CHAT_CHANNEL_PREFIX)
         val message = objectMapper.readValue(payload, ChatMessageResponse::class.java)
         messagingTemplate.convertAndSend("/topic/chat/$chatRoomId", message)
-        log.debug("Sent message to /topic/chat/$chatRoomId")
+        log.info("[MSG 📨] Broadcasting to /topic/chat/$chatRoomId - messageId: ${message.id}")
     }
 
     private fun handleAdminNotification(payload: String) {
         val notification = objectMapper.readValue(payload, ChatRoomNotification::class.java)
         messagingTemplate.convertAndSend("/topic/admin/chatrooms", notification)
-        log.debug("Sent notification to /topic/admin/chatrooms")
+        log.info(
+                "[NOTIFY 📢] Admin notification - roomId: ${notification.chatRoomId}, unread: ${notification.unreadCount}"
+        )
     }
 
     private fun handleReadNotification(channel: String, payload: String) {
@@ -73,13 +75,13 @@ class RedisSubscriber(
         // 2. 관리자 목록(Sidebar) 업데이트용 알림 (전체 관리자에게 브로드캐스트)
         messagingTemplate.convertAndSend("/topic/admin/reads", notification)
 
-        log.debug("Sent read notification to /topic/chat/$chatRoomId/read and /topic/admin/reads")
+        log.info("[READ 📤] Notification sent to /topic/chat/$chatRoomId/read")
     }
 
     private fun handleAssignmentNotification(payload: String) {
         val notification =
                 objectMapper.readValue(payload, ChatRoomAssignmentNotification::class.java)
         messagingTemplate.convertAndSend("/topic/admin/assignments", notification)
-        log.debug("Sent assignment notification to /topic/admin/assignments")
+        log.info("[ASSIGN 📤] Assignment notification - roomId: ${notification.chatRoomId}")
     }
 }

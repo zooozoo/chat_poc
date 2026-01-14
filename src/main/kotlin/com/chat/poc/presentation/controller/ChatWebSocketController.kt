@@ -45,15 +45,21 @@ class ChatWebSocketController(
                 return null
             }
 
+            log.info("[MSG →] Received message from $userType($userId) to room $roomId")
+
             // 채팅방 접근 권한 확인
             if (userType == AuthService.USER_TYPE_USER) {
                 if (!chatRoomService.canUserAccessChatRoom(userId, roomId)) {
                     log.warn("User $userId cannot access chatRoom $roomId")
                     return null
                 }
-                return messageService.sendUserMessage(roomId, userId, request.content)
+                val response = messageService.sendUserMessage(roomId, userId, request.content)
+                log.info("[MSG ✓] Message sent - roomId: $roomId, senderId: $userId")
+                return response
             } else {
-                return messageService.sendAdminMessage(roomId, userId, request.content)
+                val response = messageService.sendAdminMessage(roomId, userId, request.content)
+                log.info("[MSG ✓] Message sent - roomId: $roomId, senderId: $userId")
+                return response
             }
         } catch (e: Exception) {
             log.error("Error sending message", e)
@@ -77,6 +83,7 @@ class ChatWebSocketController(
 
             if (userId != null && userType != null) {
                 chatRoomService.markAsRead(roomId, userId, userType)
+                log.info("[READ] Room $roomId marked as read by $userType($userId)")
             }
         } catch (e: Exception) {
             log.error("Error processing read receipt", e)

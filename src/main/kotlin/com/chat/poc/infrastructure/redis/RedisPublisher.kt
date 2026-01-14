@@ -29,14 +29,14 @@ class RedisPublisher(
         val channel = "$CHAT_CHANNEL_PREFIX$chatRoomId"
         val payload = objectMapper.writeValueAsString(message)
         redisTemplate.convertAndSend(channel, payload)
-        log.debug("Published message to channel: $channel")
+        log.info("[Redis ↑] Published to channel: $channel")
     }
 
     /** Admin에게 채팅방 알림 발행 */
     fun publishAdminNotification(notification: ChatRoomNotification) {
         val payload = objectMapper.writeValueAsString(notification)
         redisTemplate.convertAndSend(ADMIN_NOTIFICATION_CHANNEL, payload)
-        log.debug("Published admin notification for chatRoom: ${notification.chatRoomId}")
+        log.info("[Redis ↑] Admin notification for roomId: ${notification.chatRoomId}")
     }
 
     /** 읽음 상태 알림 발행 */
@@ -44,13 +44,13 @@ class RedisPublisher(
         val channel = "$READ_NOTIFICATION_PREFIX$chatRoomId"
         val payload = objectMapper.writeValueAsString(notification)
         redisTemplate.convertAndSend(channel, payload)
-        log.debug("Published read notification to channel: $channel")
+        log.info("[Redis ↑] Read notification to channel: $channel")
     }
 
     /** 배정 알림 발행 */
     fun publishAssignmentNotification(notification: ChatRoomAssignmentNotification) {
         val payload = objectMapper.writeValueAsString(notification)
         redisTemplate.convertAndSend(ASSIGNMENT_CHANNEL, payload)
-        log.debug("Published assignment notification for chatRoom: ${notification.chatRoomId}")
+        log.info("[Redis ↑] Assignment notification for roomId: ${notification.chatRoomId}")
     }
 }

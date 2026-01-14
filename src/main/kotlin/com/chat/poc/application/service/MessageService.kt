@@ -10,6 +10,7 @@ import com.chat.poc.presentation.dto.ChatMessageResponse
 import com.chat.poc.presentation.dto.ChatRoomNotification
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 
@@ -20,6 +21,8 @@ class MessageService(
         private val userRepository: UserRepository,
         private val redisPublisher: RedisPublisher
 ) {
+        private val log = LoggerFactory.getLogger(javaClass)
+
         companion object {
                 private val dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
         }
@@ -51,6 +54,10 @@ class MessageService(
                                 )
                         )
 
+                log.info(
+                        "[MSG 💾] Message saved - id: ${message.id}, roomId: $chatRoomId, sender: $senderType($senderId)"
+                )
+
                 // 채팅방 마지막 메시지 정보 업데이트
                 chatRoom.updateLastMessage(content, now)
                 chatRoomRepository.save(chatRoom)
@@ -66,6 +73,9 @@ class MessageService(
                         )
 
                 // Redis를 통해 실시간 메시지 전달
+                log.info(
+                        "[MSG 📤] Publishing to Redis - roomId: $chatRoomId, messageId: ${message.id}"
+                )
                 redisPublisher.publishMessage(chatRoomId, response)
 
                 // User가 메시지를 보낸 경우 Admin에게 알림
